@@ -144,13 +144,12 @@ for i in range(1, n + 1):
     ax.get_yaxis().set_visible(False)
 plt.show()
 
-# %%
+# %% [markdown]
 # ## Part 2: Denoising noisy images
 # ### Adding some noise to the digits
 # This part will show how noisy images can be denoised using the autoencoder. 
 # Most of the code will remain very similar. 
 # The next cell adds some random noise to the mnist images, constructs the model and trains it.
-# %%
 noise_factor = 0.5
 x_train_noisy = x_train + noise_factor * np.random.normal(loc=0.0, scale=1.0, size=x_train.shape) 
 x_test_noisy = x_test + noise_factor * np.random.normal(loc=0.0, scale=1.0, size=x_test.shape) 
