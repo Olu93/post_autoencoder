@@ -117,7 +117,7 @@ class VAE(tf.keras.Model):
 x = layers.Input(shape=(28, 28, 1))
 encoder, bridging_shapes = Encoder(2)
 encoder.summary()
-decoder = Decoder([2, 3136, [7, 7, 64]])
+decoder = Decoder(bridging_shapes)
 decoder.summary()
 # make the model:
 vae = VAE(encoder, decoder)
@@ -127,10 +127,10 @@ vae.compile(optimizer=tf.keras.optimizers.Adam())
 vae.fit(x_train, epochs=30, batch_size=128)
 
 # %%
-encodings, z_mean, z_log_var = encoder.predict(x_test)
+z_mean, z_log_var, z_sample = encoder.predict(x_test)
 z_vars = np.array([np.eye(z_log_var.shape[1]) * var for var in np.exp(.5 * z_log_var)])
 sampled_encodings = np.array([np.random.multivariate_normal(mean, variance) for mean, variance in zip(z_mean, z_vars)])
-decodings = decoder.predict(encodings)
+decodings = decoder.predict(z_mean)
 
 n = 10
 rows = 3
@@ -143,7 +143,7 @@ for i in range(1, n + 1):
     ax.get_xaxis().set_visible(False)
     ax.get_yaxis().set_visible(False)
 
-    encoding_strings = "\n".join([f"{feature:.2f}" for feature in encodings[i]])
+    encoding_strings = "\n".join([f"{feature:.2f}" for feature in z_mean[i]])
     ax = plt.subplot(rows, n, i + n)
     ax.text(0.5, 0.5, encoding_strings, horizontalalignment='center', verticalalignment='center')
     ax.axis('off')
@@ -156,28 +156,6 @@ for i in range(1, n + 1):
 plt.show()
 
 # %%
-# display a 2D manifold of the digits
-# n = 30  # figure with 15x15 digits
-# scale = 2
-# digit_size = 28
-# figure = np.zeros((digit_size * n, digit_size * n))
-# # we will sample n points within [-15, 15] standard deviations
-# grid_x = np.linspace(-scale, scale, n)
-# grid_y = np.linspace(-scale, scale, n)[::-1]
-
-# for i, yi in enumerate(grid_x):
-#     for j, xi in enumerate(grid_y):
-#         z_sample = np.array([[xi, yi]])
-#         x_decoded = decoder.predict(z_sample)
-#         digit = x_decoded[0].reshape(digit_size, digit_size)
-#         figure[i * digit_size:(i + 1) * digit_size, j * digit_size:(j + 1) * digit_size] = digit
-
-
-# plt.figure(figsize=(10, 10))
-# plt.xlabel("z[0]")
-# plt.ylabel("z[1]")
-# plt.imshow(figure, cmap="Greys_r")
-# plt.show()
 def plot_latent(encoder, decoder):
     # display a n*n 2D manifold of digits
     n = 30
