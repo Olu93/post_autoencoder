@@ -1,4 +1,5 @@
 # https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling/tree/master/Generative
+# https://github.com/AnTao97/PointCloudDatasets/blob/master/dataset.py
 # %%
 import tensorflow as tf
 import pickle
@@ -11,6 +12,7 @@ import random
 import numpy as np
 import tensorflow.keras.layers as layers
 import tensorflow.keras.regularizers as reg
+import tensorflow.keras.optimizers as opt
 from tensorflow.keras.models import Model
 from tensorflow.keras import backend as K
 import matplotlib.pyplot as plt
@@ -102,12 +104,13 @@ def Decoder(bridging_shapes):
     d = layers.Dense(bridging_shapes[1], kernel_regularizer=reg.L1L2(.1, .1))(z)
     # d = layers.Dropout(.5)(d)
     d = layers.Reshape(bridging_shapes[2])(d)
+    d = DecoderUnit(d, 64)
     d = DecoderUnit(d, 48)
     d = DecoderUnit(d, 32)
     d = DecoderUnit(d, 16)
     # d = layers.Conv3DTranspose(1, 3, activation="elu", strides=2, padding="same")(d)
-    decoder_outputs = layers.Conv3DTranspose(1, 3, activation="sigmoid", strides=2, padding="same")(d)
-    # decoder_outputs = tf.exp(x)
+    decoder_outputs = layers.Conv3DTranspose(1, 3, activation="sigmoid", strides=1, padding="same")(d)
+    # decoder_outputs = tf.pow(decoder_outputs, 3)
     return Model(z, decoder_outputs)
 
 
@@ -129,6 +132,10 @@ def generate_loss_function(penalty=.5):
 
         return loss
 
+    def loss_function2(y, y_pred):
+        mse = tf.reduce_mean(tf.pow(y - y_pred, 2))
+        return mse
+
     return loss_function
 
 
@@ -148,7 +155,8 @@ decoder.summary()
 autoencoder = Model(x, decoder(encoder(x)))
 autoencoder.summary()
 ## %%
-loss_fn = generate_loss_function(0.99)
+loss_fn = generate_loss_function(0.97)
+opt_cl = opt.SGD(learning_rate=0.001, nesterov=True, momentum=.9)
 autoencoder.compile(optimizer='adam', loss=loss_fn)
 
 # # x_train_mod =
@@ -160,7 +168,7 @@ autoencoder.fit(x_train_mod, y_train_mod, epochs=200, batch_size=1, shuffle=True
 # plot_binary_pointcound(voxel_data_collected[1][0])
 # %%
 n = 5
-test_sample = np.array(random.sample(list(x_test), n))
+test_sample = np.array(random.sample(list(x_train), n))
 z = encoder.predict(test_sample)
 
 originals = test_sample.reshape(test_sample.shape[:-1])
@@ -181,13 +189,13 @@ for i in range(0, n):
     # ax.axis('off')
     ax = fig.add_subplot(rows, n, cnt + 1 * n, projection='3d')
     # print(np.argwhere(decodings[i].reshape(data_shape[:-1]) > 0.5).shape)
-    elem2 = np.argwhere(decodings[i] > .9)
+    elem2 = np.argwhere(decodings[i] >= .9)
     ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
 
 plt.show()
 
 
- # %%
+# %%
 # Function to produce the data matrix for rendering.
 def make_data_matrix(x, intensity):
     return intensity * np.repeat(np.repeat(np.repeat(x[0][0], 3, axis=0), 3, axis=1), 3, axis=2)
