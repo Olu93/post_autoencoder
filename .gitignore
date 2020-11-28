@@ -3,6 +3,7 @@ data/**
 pyntcloud_plot_assets
 pyntcloud_*
 plotVG.html
+logs/**
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,jupyternotebooks,python
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,jupyternotebooks,python
 
