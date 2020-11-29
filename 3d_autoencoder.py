@@ -181,7 +181,7 @@ def Decoder(bridging_shapes):
     d = DecoderUnit(d, 32)
     d = DecoderUnit(d, 16)
     # d = layers.Conv3DTranspose(1, 3, activation="elu", strides=2, padding="same")(d)
-    decoder_outputs = layers.Conv3DTranspose(1, 3, activation="sigmoid", strides=1, padding="same")(d)
+    decoder_outputs = layers.Conv3DTranspose(1, 3, activation=None, strides=1, padding="same")(d)
     # decoder_outputs = tf.pow(decoder_outputs, 3)
     return Model(z, decoder_outputs)
 
@@ -228,14 +228,14 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + 2 * (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         penalty *= 100
-        clipped_y_pred = tf.keras.backend.clip(y_pred, 1e-7, 1.0 - 1e-7)
-        binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100-penalty) * (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
+        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-7, 1.0 - 1e-7)
+        binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
         loss = tf.reduce_mean(binary_cross_entropy)
         return loss
 
     @staticmethod
     def clip_pred(y_pred, min_val, max_val):
-        clipped_y_pred = tf.keras.backend.clip(y_pred, 1e-7, 1.0 - 1e-7)
+        clipped_y_pred = tf.keras.backend.clip(tf.math.sigmoid(y_pred), min_val, max_val)
         return clipped_y_pred
 
 
@@ -266,9 +266,7 @@ autoencoder.compile(optimizer=opt_cl, loss=loss_fn)
 x_train_mod, y_train_mod = _rebase(x_train, x_train, 0, 1)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 x_train_mod, y_train_mod = _rebase(x_train, x_train, -0.1, 2)
-x_test_mod, y_test_mod = _rebase(x_test, x_test, -0.1, 2)
-# %%
-
+x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 
 def lr_schedule(epoch):
     """
@@ -294,8 +292,10 @@ class CustomCallback(tf.keras.callbacks.Callback):
         test_sample = np.array(random.sample(list(self.x_test), 100))
         val_true = test_sample
         val_predict = np.asarray(self.model.predict(test_sample))
+        thresh = sorted(np.linspace(0, 1, 11))
+        # fig = generate_img_of_decodings_expanded(val_true, val_predict, [.20, .35, .50, .80, .9, .95, .99, .999])
 
-        fig = generate_img_of_decodings_expanded(val_true, val_predict, [.6, .9, .95, .99, .999])
+        fig = generate_img_of_decodings_expanded(val_true, val_predict, thresh)
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
         plt.close()
@@ -311,6 +311,8 @@ class CustomCallback(tf.keras.callbacks.Callback):
         tf.summary.scalar("prediction-max", np.max(val_predict), step=epoch)
         tf.summary.scalar("prediction-mean", np.mean(val_predict), step=epoch)
         tf.summary.scalar("prediction-median", np.median(val_predict), step=epoch)
+        minmax_ratio = np.min(val_predict)/np.max(val_predict)
+        tf.summary.scalar("minmax-ratio", minmax_ratio, step=epoch)
         tf.summary.histogram("BCE", WeightedBinaryCrossEntropy.wbce(val_true, val_predict, self.penalty), step=epoch)
         tf.summary.image(f"After epoch: {epoch}", img.reshape(-1, *img.shape), step=epoch)
         tf.summary.flush()
@@ -327,7 +329,7 @@ history = autoencoder.fit(
     x_train_mod,
     y_train_mod,
     epochs=25,
-    batch_size=5,
+    batch_size=1,
     shuffle=True,
     validation_data=validation_data,
     callbacks=[
