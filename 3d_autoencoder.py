@@ -65,17 +65,18 @@ def generate_img_of_decodings(encodings, decodings, n=5):
 
 
 def generate_img_of_decodings_expanded(encodings, decodings, thresholds=[.9, .95, .99, .999, 1]):
-    rows = 2
-    fig = plt.figure(figsize=(20, 5))
-    n = len(thresholds)
+    rows = 1
+    fig = plt.figure(figsize=(25, 5))
+    n = len(thresholds) + 1
+
+    ax = fig.add_subplot(rows, n, 1, projection='3d')
+    elem1 = np.argwhere(encodings[0])
+    ax.set_title("Original")
+    ax.scatter(elem1[:, 0], elem1[:, 1], elem1[:, 2], cmap="Greys_r")
     for i, tresh in enumerate(thresholds):
         cnt = i + 1
-        ax = fig.add_subplot(rows, n, cnt, projection='3d')
-        elem1 = np.argwhere(encodings[0])
-        ax.set_title(f"Capped at {tresh:.2f}")
-        ax.scatter(elem1[:, 0], elem1[:, 1], elem1[:, 2], cmap="Greys_r")
-        # encoding_strings = "\n".join([f"{feature:.2f}" for feature in z[i]])
-        ax = fig.add_subplot(rows, n, cnt + 1 * n, projection='3d')
+        ax = fig.add_subplot(rows, n, cnt + 1, projection='3d')
+        ax.set_title(f"> {tresh:05}")
         elem2 = np.argwhere(decodings[0] >= tresh)
         ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
 
@@ -94,7 +95,12 @@ def plot_pointcound(pynt_cloud_object, n=32):
     return example_voxelgrid.plot(d=3, mode="binary", cmap="hsv", width=400, height=400)
 
 
-plot_pointcound(PyntCloud.from_file("data/airplane_0001.ply"))
+# test_sample = np.array(random.sample(list(x_test_mod), 100))
+# val_true = test_sample
+# val_predict = np.asarray(autoencoder.predict(test_sample))
+# fig = generate_img_of_decodings_expanded(val_true, val_predict)
+
+# plot_pointcound(PyntCloud.from_file("data/airplane_0001.ply"))
 
 # %%
 path_to_dataset = pathlib.Path("data/dataset.pkl")
@@ -181,8 +187,9 @@ def Decoder(bridging_shapes):
     d = DecoderUnit(d, 32)
     d = DecoderUnit(d, 16)
     # d = layers.Conv3DTranspose(1, 3, activation="elu", strides=2, padding="same")(d)
-    decoder_outputs = layers.Conv3DTranspose(1, 3, activation=None, strides=1, padding="same")(d)
+    decoder_outputs = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")(d)
     # decoder_outputs = tf.pow(decoder_outputs, 3)
+
     return Model(z, decoder_outputs)
 
 
@@ -194,7 +201,6 @@ def generate_loss_function(penalty=.5):
     assert penalty >= 0 and penalty <= 1, "Choose value between 0 and 1"
     penalty = tf.constant(penalty, dtype=tf.float32)
 
-    @tf.function
     def loss_function(y, y_pred):
         clipped_y_pred = y_pred
         clipped_y_pred = tf.keras.backend.clip(y_pred, 0.1, 0.99)
@@ -220,7 +226,7 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         self.penalty = penalty
 
     def call(self, y_true, y_pred):
-        return WeightedBinaryCrossEntropy.wbce(y_true, y_pred, self.penalty)
+        return WeightedBinaryCrossEntropy.wbce(y_true, y_pred, self.penalty)[0]
 
     @staticmethod
     def wbce(y_true, y_pred, penalty):
@@ -228,14 +234,14 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + 2 * (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         penalty *= 100
-        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-7, 1.0 - 1e-7)
+        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-3, 1.0 - 1e-3)
         binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
-        loss = tf.reduce_mean(binary_cross_entropy)
-        return loss
+        loss = tf.reduce_sum(binary_cross_entropy)
+        return loss, binary_cross_entropy
 
     @staticmethod
     def clip_pred(y_pred, min_val, max_val):
-        clipped_y_pred = tf.keras.backend.clip(tf.math.sigmoid(y_pred), min_val, max_val)
+        clipped_y_pred = tf.keras.backend.clip(y_pred, min_val, max_val)
         return clipped_y_pred
 
 
@@ -254,19 +260,40 @@ decoder.summary()
 
 autoencoder = Model(x, decoder(encoder(x)))
 autoencoder.summary()
-## %%
-penalty = .97
+# %%
+penalty = .90
+learning_rate = 0.01
+comment = "use overall sum"
+lbound, ubound = -0, 1
+
 loss_fn = generate_loss_function(penalty)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)
-
-opt_cl = opt.SGD(learning_rate=0.0001, nesterov=True, momentum=.9)
+opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
+opt_cl = opt.Adam(learning_rate=learning_rate)
 autoencoder.compile(optimizer=opt_cl, loss=loss_fn)
-
-# # x_train_mod =
 x_train_mod, y_train_mod = _rebase(x_train, x_train, 0, 1)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
-x_train_mod, y_train_mod = _rebase(x_train, x_train, -0.1, 2)
+x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
+# x_train_mod, _ = _rebase(x_train, x_test, lbound, ubound)
+# y_train_mod, _ = _rebase(x_train, x_test, 0, 1)
+
+
+def construct_log_dir(elements=[]):
+    log_dir = f"logs/{datetime.now().strftime('%H%M%S')}/" + " - ".join(elements)
+    return log_dir
+
+
+elems = [
+    f"[{lbound:07.7f} & {ubound:07.7f}]",
+    f"[{penalty:05.5f}]",
+    f"[{learning_rate:07.7f}]",
+    f"{comment}" if comment else "NA",
+]
+
+log_dir = construct_log_dir(elems)
+print(log_dir)
+
 
 def lr_schedule(epoch):
     """
@@ -278,6 +305,15 @@ def lr_schedule(epoch):
 
     tf.summary.scalar('learning rate', data=learning_rate, step=epoch)
     return learning_rate
+
+
+def my_ceil(a, precision=0):
+    # https://stackoverflow.com/a/58065394/4162265
+    return np.round(a + 0.5 * 10**(-precision), precision)
+
+
+def my_floor(a, precision=0):
+    return np.round(a - 0.5 * 10**(-precision), precision)
 
 
 class CustomCallback(tf.keras.callbacks.Callback):
@@ -292,34 +328,41 @@ class CustomCallback(tf.keras.callbacks.Callback):
         test_sample = np.array(random.sample(list(self.x_test), 100))
         val_true = test_sample
         val_predict = np.asarray(self.model.predict(test_sample))
-        thresh = sorted(np.linspace(0, 1, 11))
+        loss, bce = WeightedBinaryCrossEntropy.wbce(val_true, val_predict, self.penalty)
+        min_pred = np.min(val_predict)
+        max_pred = np.max(val_predict)
+        mean_pred = np.mean(val_predict)
+        median_pred = np.median(val_predict)
+        minmax_ratio = min_pred / max_pred
+        print(f"Min {min_pred:.3f} - Max {max_pred:.3f} - Mean {mean_pred:.3f} - Loss {loss:.3f}")
         # fig = generate_img_of_decodings_expanded(val_true, val_predict, [.20, .35, .50, .80, .9, .95, .99, .999])
 
+        # precision = 3
+        # floored_max = my_floor(max_pred, precision)
+        # thresh = sorted(floored_max + np.linspace(0, 1, 11) / 10**precision)
+        thresh = np.linspace(0, 1, 11)
         fig = generate_img_of_decodings_expanded(val_true, val_predict, thresh)
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
         plt.close()
         canvas = FigureCanvasAgg(fig)
-        # Retrieve a view on the renderer buffer
         canvas.draw()
         buf = canvas.buffer_rgba()
-        # convert to a NumPy array
         img = np.asarray(buf, np.uint8)
 
         tf.summary.histogram("predictions", val_predict, step=epoch)
-        tf.summary.scalar("prediction-min", np.min(val_predict), step=epoch)
-        tf.summary.scalar("prediction-max", np.max(val_predict), step=epoch)
-        tf.summary.scalar("prediction-mean", np.mean(val_predict), step=epoch)
-        tf.summary.scalar("prediction-median", np.median(val_predict), step=epoch)
-        minmax_ratio = np.min(val_predict)/np.max(val_predict)
-        tf.summary.scalar("minmax-ratio", minmax_ratio, step=epoch)
-        tf.summary.histogram("BCE", WeightedBinaryCrossEntropy.wbce(val_true, val_predict, self.penalty), step=epoch)
+        tf.summary.scalar("min", min_pred, step=epoch)
+        tf.summary.scalar("max", max_pred, step=epoch)
+        tf.summary.scalar("mean", mean_pred, step=epoch)
+        tf.summary.scalar("median", median_pred, step=epoch)
+        tf.summary.scalar("minmax", minmax_ratio, step=epoch)
+        tf.summary.histogram("BCE", bce, step=epoch)
+        tf.summary.scalar("Loss", loss, step=epoch)
         tf.summary.image(f"After epoch: {epoch}", img.reshape(-1, *img.shape), step=epoch)
         tf.summary.flush()
 
 
-log_dir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
-file_writer = tf.summary.create_file_writer(log_dir + "/metrics")
+file_writer = tf.summary.create_file_writer(log_dir)
 file_writer.set_as_default()
 tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
 lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
@@ -328,14 +371,14 @@ image_log_callback = CustomCallback(validation_data, penalty=penalty)
 history = autoencoder.fit(
     x_train_mod,
     y_train_mod,
-    epochs=25,
-    batch_size=1,
+    epochs=50,
+    batch_size=2,
     shuffle=True,
     validation_data=validation_data,
     callbacks=[
         image_log_callback,
-        #   lr_callback,
-        tensorboard_callback,
+        # lr_callback,
+        # tensorboard_callback,
     ])
 # # %%
 # plot_binary_pointcound(voxel_data_collected[1][0])
@@ -362,7 +405,7 @@ for i in range(0, n):
     # ax.axis('off')
     ax = fig.add_subplot(rows, n, cnt + 1 * n, projection='3d')
     # print(np.argwhere(decodings[i].reshape(data_shape[:-1]) > 0.5).shape)
-    elem2 = np.argwhere(decodings[i] >= .97)
+    elem2 = np.argwhere(decodings[i] >= np.max(decodings) - 1)
     ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
 
 plt.show()
