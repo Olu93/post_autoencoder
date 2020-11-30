@@ -47,7 +47,7 @@ def plot_binary_pointcound(vertex_list):
     tcloud.plot(mesh=True, width=400, height=400, backend="threejs")
 
 
-def generate_img_of_decodings(encodings, decodings, n=5):
+def generate_img_of_decodings(encodings, decodings, n=5, thresh=.8):
     rows = 2
     fig = plt.figure(figsize=(8, 5))
 
@@ -58,7 +58,7 @@ def generate_img_of_decodings(encodings, decodings, n=5):
         ax.scatter(elem1[:, 0], elem1[:, 1], elem1[:, 2], cmap="Greys_r")
         # encoding_strings = "\n".join([f"{feature:.2f}" for feature in z[i]])
         ax = fig.add_subplot(rows, n, cnt + 1 * n, projection='3d')
-        elem2 = np.argwhere(decodings[i] >= .97)
+        elem2 = np.argwhere(decodings[i] >= thresh)
         ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
 
     return fig
@@ -234,7 +234,7 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + 2 * (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         penalty *= 100
-        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-3, 1.0 - 1e-3)
+        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-7, 1.0 - 1e-7)
         binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
         loss = tf.reduce_sum(binary_cross_entropy)
         return loss, binary_cross_entropy
@@ -263,8 +263,9 @@ autoencoder.summary()
 # %%
 penalty = .90
 learning_rate = 0.01
-comment = "use overall sum"
+comment = "serious run"
 lbound, ubound = -0, 1
+batch_size = 5
 
 loss_fn = generate_loss_function(penalty)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)
@@ -288,6 +289,7 @@ elems = [
     f"[{lbound:07.7f} & {ubound:07.7f}]",
     f"[{penalty:05.5f}]",
     f"[{learning_rate:07.7f}]",
+    f"[{batch_size:02d}]",
     f"{comment}" if comment else "NA",
 ]
 
@@ -371,8 +373,8 @@ image_log_callback = CustomCallback(validation_data, penalty=penalty)
 history = autoencoder.fit(
     x_train_mod,
     y_train_mod,
-    epochs=50,
-    batch_size=2,
+    epochs=100,
+    batch_size=batch_size,
     shuffle=True,
     validation_data=validation_data,
     callbacks=[
@@ -380,9 +382,25 @@ history = autoencoder.fit(
         # lr_callback,
         # tensorboard_callback,
     ])
-# # %%
-# plot_binary_pointcound(voxel_data_collected[1][0])
 # %%
+encoder.save("models/3d_encoder.h5")
+decoder.save("models/3d_decoder.h5")
+autoencoder.save("models/3d_autoencoder.h5")
+# %%
+mpath = pathlib.Path("models/3d_encoder.h5")
+if mpath.exists():
+    encoder = tf.keras.models.load_model(mpath)
+
+mpath = pathlib.Path("models/3d_decoder.h5")
+if mpath.exists():
+    decoder = tf.keras.models.load_model(mpath)
+
+mpath = pathlib.Path("models/3d_autoencoder.h5")
+if mpath.exists():
+    autoencoder = tf.keras.models.load_model(mpath, compile=False, custom_objects={'WeightedBinaryCrossEntropy': WeightedBinaryCrossEntropy(penalty), 'penalty':penalty})
+
+# %%
+
 n = 5
 test_sample = np.array(random.sample(list(x_train), n))
 z = encoder.predict(test_sample)
@@ -390,48 +408,6 @@ z = encoder.predict(test_sample)
 originals = test_sample.reshape(test_sample.shape[:-1])
 decodings = decoder.predict(z).reshape(test_sample.shape[:-1])
 # %%
-rows = 2
-fig = plt.figure(figsize=(8, 5))
-elem = None
-for i in range(0, n):
-    # display original
-    cnt = i + 1
-    ax = fig.add_subplot(rows, n, cnt, projection='3d')
-    elem1 = np.argwhere(originals[i])
-    ax.scatter(elem1[:, 0], elem1[:, 1], elem1[:, 2], cmap="Greys_r")
-    encoding_strings = "\n".join([f"{feature:.2f}" for feature in z[i]])
-    # ax = fig.add_subplot(rows, n, i + n)
-    # ax.text(0.5, 0.5, encoding_strings, horizontalalignment='center', verticalalignment='center')
-    # ax.axis('off')
-    ax = fig.add_subplot(rows, n, cnt + 1 * n, projection='3d')
-    # print(np.argwhere(decodings[i].reshape(data_shape[:-1]) > 0.5).shape)
-    elem2 = np.argwhere(decodings[i] >= np.max(decodings) - 1)
-    ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
-
+generate_img_of_decodings(originals, decodings, thresh=.7)
 plt.show()
 
-
-# %%
-# Function to produce the data matrix for rendering.
-def make_data_matrix(x, intensity):
-    return intensity * np.repeat(np.repeat(np.repeat(x[0][0], 3, axis=0), 3, axis=1), 3, axis=2)
-
-
-# %%
-from mpl_toolkits.mplot3d import Axes3D
-d_num = 1
-fig = plt.figure()
-ax = Axes3D(fig)
-elem = np.argwhere(x_test[d_num].reshape(data_shape[:-1]))
-ax.scatter(elem[:, 0], elem[:, 1], elem[:, 2])
-
-# %%
-fig = plt.figure()
-ax = Axes3D(fig)
-elem = np.argwhere(decodings[d_num].reshape(data_shape[:-1]) > 0.45)
-ax.scatter(elem[:, 0], elem[:, 1], elem[:, 2])
-
-# %%
-tmp = PyntCloud(pd.DataFrame(elem, columns="x y z".split()))
-tmp.plot(mesh=True, backend="threejs")
-# %%
