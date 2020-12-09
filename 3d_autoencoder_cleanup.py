@@ -2,12 +2,15 @@
 # https://github.com/AnTao97/PointCloudDatasets/blob/master/dataset.py
 # %%
 from datetime import datetime
+from enum import auto
+import functools
 import io
 from pyntcloud.structures.voxelgrid import VoxelGrid
 import tensorflow as tf
 import pickle
 import pyvista as pv
 from pyntcloud import PyntCloud
+from tensorflow.python.keras.engine.base_layer import Layer
 from tqdm import tqdm
 import pandas as pd
 import glob
@@ -25,6 +28,8 @@ import pathlib
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 gpus = tf.config.experimental.list_physical_devices('GPU')
+# tf.config.run_functions_eagerly(True)
+
 if gpus:
     try:
         for gpu in gpus:
@@ -34,6 +39,10 @@ if gpus:
 
 
 # %%
+def compose(f, g):
+    return lambda arg: f(g(arg))
+
+
 def retrieve_voxel_data(cloud, n=8):
     voxelgrid_id = cloud.add_structure("voxelgrid", n_x=n, n_y=n, n_z=n)
     voxelgrid = cloud.structures[voxelgrid_id]
@@ -83,24 +92,10 @@ def generate_img_of_decodings_expanded(encodings, decodings, thresholds=[.9, .95
     return fig
 
 
-# def plot_pointcound(pynt_cloud_object):
-#     example_cloud = pynt_cloud_object
-#     example_voxelgrid_id = example_cloud.add_structure("voxelgrid", n_x=32, n_y=32, n_z=32)
-#     example_voxelgrid = example_cloud.structures[example_voxelgrid_id]
-#     return example_voxelgrid.plot(d=3, mode="binary", cmap="hsv", width=400, height=400)
-
-
 def plot_pointcound(pynt_cloud_object, n=32):
     vol, example_voxelgrid = retrieve_voxel_data(pynt_cloud_object, n)
     return example_voxelgrid.plot(d=3, mode="binary", cmap="hsv", width=400, height=400)
 
-
-# test_sample = np.array(random.sample(list(x_test_mod), 100))
-# val_true = test_sample
-# val_predict = np.asarray(autoencoder.predict(test_sample))
-# fig = generate_img_of_decodings_expanded(val_true, val_predict)
-
-# plot_pointcound(PyntCloud.from_file("data/airplane_0001.ply"))
 
 # %%
 path_to_dataset = pathlib.Path("data/dataset.pkl")
@@ -135,93 +130,142 @@ if not path_to_voxel_matrix.exists():
     np.savez_compressed(path_to_voxel_matrix, data=data)
 data_shape = data.shape[1:]
 f"Loaded voxel data for {num_meshes} meshes"
-# %%
-# voxel_data_collected[2][1].plot(d=3, mode="density", width=400, height=400)
+
 # %%
 cut_point = .1
 x_train, x_test = train_test_split(data.astype(np.float), shuffle=True, test_size=.1)
 f"Training: {x_train.shape} | Test: {x_test.shape}"
 
 # %%
+# https://stackoverflow.com/a/58526969/4162265
+# https://www.tensorflow.org/guide/keras/custom_layers_and_models#putting_it_all_together_an_end-to-end_example
+tf.config.run_functions_eagerly(True)
 
 
-def EncoderUnit(e, num_filters):
-    e = layers.Conv3D(num_filters, 3, activation='elu', strides=2, padding='same', kernel_regularizer=reg.L1L2(.1, .1))(e)
-    e = layers.Dropout(.5)(e)
-    e = layers.BatchNormalization()(e)
-    return e
+class EncoderUnit(Layer):
+    def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
+        super(EncoderUnit, self).__init__(name=name, **kwargs)
+        self.conv = layers.Conv3D(num_filters, 3, activation='elu', strides=2, padding='same', kernel_regularizer=reg.L1L2(.1, .1))
+        self.drop = layers.Dropout(.5)
+        self.norm = layers.BatchNormalization()
+
+    def call(self, inputs, **kwargs):
+        x = self.conv(inputs)
+        x = self.drop(x)
+        x = self.norm(x)
+        return x
 
 
-def DecoderUnit(d, num_filters):
-    d = layers.Conv3DTranspose(num_filters, 3, activation="elu", strides=2, padding="same", kernel_regularizer=reg.L1L2(.1, .1))(d)
-    d = layers.Dropout(.5)(d)
-    d = layers.BatchNormalization()(d)
-    return d
+class DecoderUnit(Layer):
+    def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
+        super(DecoderUnit, self).__init__(name=name, **kwargs)
+        self.conv = layers.Conv3DTranspose(num_filters, 3, activation="elu", strides=2, padding="same", kernel_regularizer=reg.L1L2(.1, .1))
+        self.drop = layers.Dropout(.5)
+        self.norm = layers.BatchNormalization()
+
+    def call(self, inputs, **kwargs):
+        x = self.conv(inputs)
+        x = self.drop(x)
+        x = self.norm(x)
+        return x
 
 
-def Encoder(data_shape, output_dim=8):
-    encoder_inputs = tf.keras.Input(shape=data_shape)
-    x = encoder_inputs
-    x = EncoderUnit(x, 16)
-    x = EncoderUnit(x, 32)
-    x = EncoderUnit(x, 48)
-    x = EncoderUnit(x, 64)
-    unflattened_shape = list(x.shape[1:])
-    x = layers.Flatten()(x)
-    flattened_shape = list(x.shape[1:])[0]
-    # e = layers.Dense(8, activation="elu")(e)
-    z = layers.Dense(output_dim, kernel_regularizer=reg.L1L2(.1, .1))(x)
-    # z = layers.Dropout(.5)(z)
-    print("8==============D")
-    print(output_dim)
-    return Model(encoder_inputs, z), [output_dim, flattened_shape, unflattened_shape]
+class Encoder(Model):
+    def __init__(self, data_shape, output_dim=8, EncoderUnit=EncoderUnit, name="encoder", **kwargs):
+        super(Encoder, self).__init__(name=name, **kwargs)
+        self.data_shape = data_shape
+        self.output_dim = output_dim
+        self.elayers = [
+            EncoderUnit(16),
+            EncoderUnit(32),
+            EncoderUnit(48),
+            EncoderUnit(64),
+        ]
+        self.sampler = Sampling(self.output_dim)
+
+    def call(self, inputs, **kwargs):
+        x = inputs
+        for layer in self.elayers:
+            x = layer(x)
+        self.bridging_shape = list(x.shape[1:])
+        z = self.sampler(x)
+        return z, self.bridging_shape
 
 
-def Decoder(bridging_shapes):
-    print(bridging_shapes)
-    z = layers.Input(shape=(bridging_shapes[0], ))  # adapt this if using `channels_first` image data format
+class Sampling(Layer):
+    """Uses (z_mean, z_log_var) to sample z, the vector encoding a digit."""
+    def __init__(self, output_dim, name="Sampler", **kwargs):
+        super(Sampling, self).__init__(name=name, **kwargs)
+        self.output_dim = output_dim
+        self.flatten = layers.Flatten()
+        self.sample = layers.Dense(self.output_dim, kernel_regularizer=reg.L1L2(.1, .1))
 
-    d = layers.Dense(bridging_shapes[1], kernel_regularizer=reg.L1L2(.1, .1))(z)
-    # d = layers.Dropout(.5)(d)
-    d = layers.Reshape(bridging_shapes[2])(d)
-    d = DecoderUnit(d, 64)
-    d = DecoderUnit(d, 48)
-    d = DecoderUnit(d, 32)
-    d = DecoderUnit(d, 16)
-    # d = layers.Conv3DTranspose(1, 3, activation="elu", strides=2, padding="same")(d)
-    decoder_outputs = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")(d)
-    # decoder_outputs = tf.pow(decoder_outputs, 3)
-
-    return Model(z, decoder_outputs)
+    def call(self, inputs):
+        x = self.flatten(inputs)
+        z = self.sample(x)
+        return z
 
 
-def output_manipulation(x):
-    return tf.where(tf.less_equal(x, .5), .0, x)
+class Decoder(Model):
+    def __init__(self, original_shape, bridging_shape, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
+        super(Decoder, self).__init__(name=name, **kwargs)
+        self.original_shape = original_shape
+        self.bridging_shape = bridging_shape
+        self.receiver = layers.Dense(np.prod(bridging_shape), kernel_regularizer=reg.L1L2(.1, .1))
+        self.unflattener = layers.Reshape(bridging_shape)
+        self.dlayers = [
+            DecoderUnit(64),
+            DecoderUnit(48),
+            DecoderUnit(32),
+            DecoderUnit(16),
+        ]
+        self.final_decoding = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")
+
+        # self.run_layers = functools.reduce(lambda x, y: y(x), self.layers)
+
+    def call(self, inputs, **kwargs):
+        x = self.receiver(inputs)
+        x = self.unflattener(x)
+        for layer in self.dlayers:
+            x = layer(x)
+        decoder_outputs = self.final_decoding(x)
+        return decoder_outputs
 
 
-def generate_loss_function(penalty=.5):
-    assert penalty >= 0 and penalty <= 1, "Choose value between 0 and 1"
-    penalty = tf.constant(penalty, dtype=tf.float32)
+class AutoEncoder(Model):
+    def __init__(self, data_shape, output_dim=300, verbose=False, name="autoencoder", **kwargs):
+        super(AutoEncoder, self).__init__(name=name, **kwargs)
+        self.original_shape = data_shape
+        self.in_shape = (None, ) + self.original_shape
+        self.output_dim = output_dim
+        self.encoder = Encoder(self.original_shape, self.output_dim)
+        self.encoder.build(self.in_shape)
+        self.decoder = Decoder(self.original_shape, self.encoder.bridging_shape)
 
-    def loss_function(y, y_pred):
-        clipped_y_pred = y_pred
-        clipped_y_pred = tf.keras.backend.clip(y_pred, 0.1, 0.99)
-        binary_cross_entropy = -y * penalty * tf.math.log(clipped_y_pred) + 2 * (1 - y) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
-        loss = tf.reduce_mean(binary_cross_entropy)
-        return loss
 
-    return loss_function
+    def call(self, inputs, **kwargs):
+        x = layers.InputLayer(self.original_shape)(inputs)
+        z, bridging_shape = self.encoder(x)
+        x = layers.InputLayer(self.original_shape)(z)
+        decodings = self.decoder(x, bridging_shape=bridging_shape)
+        return decodings
+
+    def summary(self, line_length=None, positions=None, print_fn=None):
+        self.build((None, ) + self.original_shape)
+        self.encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+        self.decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+        return super().summary(line_length=line_length, positions=positions, print_fn=print_fn)
 
 
 class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
     # https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x
     """
     Args:
-      pos_weight: Scalar to affect the positive labels of the loss function.
-      weight: Scalar to affect the entirety of the loss function.
-      from_logits: Whether to compute loss from logits or the probability.
-      reduction: Type of tf.keras.losses.Reduction to apply to loss.
-      name: Name of the loss function.
+    pos_weight: Scalar to affect the positive labels of the loss function.
+    weight: Scalar to affect the entirety of the loss function.
+    from_logits: Whether to compute loss from logits or the probability.
+    reduction: Type of tf.keras.losses.Reduction to apply to loss.
+    name: Name of the loss function.
     """
     def __init__(self, penalty, reduction=tf.keras.losses.Reduction.AUTO, name='weighted_binary_crossentropy'):
         super().__init__(reduction=reduction, name=name)
@@ -232,9 +276,6 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
 
     @staticmethod
     def wbce(y_true, y_pred, penalty):
-        # clipped_y_pred = tf.keras.backend.clip(y_pred, 0.01, 0.99)
-        # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + 2 * (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
-        # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         penalty *= 100
         clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-7, 1.0 - 1e-7)
         binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
@@ -253,27 +294,22 @@ def _rebase(x1, x2, min_val, max_val):
     return x1, x2
 
 
-x = layers.Input(shape=data_shape)
-# x = (x * tf.constant(6.0)) - tf.constant(1.0)
-encoder, bridging_shapes = Encoder(data_shape, 300)
-encoder.summary()
-decoder = Decoder(bridging_shapes)
-decoder.summary()
-
-autoencoder = Model(x, decoder(encoder(x)))
-autoencoder.summary()
-# %%
-penalty = .95
+# if verbose > 0:
+penalty = .90
 learning_rate = 0.01
-comment = "serious run"
+comment = "refactored run"
 lbound, ubound = -1, 2
-batch_size = 4
+batch_size = 5
+output_dim = 300
 
-loss_fn = generate_loss_function(penalty)
+autoencoder = AutoEncoder(data_shape=data_shape, output_dim=output_dim, verbose=2)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)
 opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
 opt_cl = opt.Adam(learning_rate=learning_rate)
+
 autoencoder.compile(optimizer=opt_cl, loss=loss_fn)
+autoencoder.summary()
+# %%
 x_train_mod, y_train_mod = _rebase(x_train, x_train, 0, 1)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
@@ -283,7 +319,7 @@ x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 
 
 def construct_log_dir(elements=[]):
-    log_dir = f"logs/{datetime.now().strftime('%H%M%S')}/" + " - ".join(elements)
+    log_dir = f"logs/{datetime.now().strftime('%m%d%H%M%S')}/" + " - ".join(elements)
     return log_dir
 
 
@@ -344,7 +380,7 @@ class CustomCallback(tf.keras.callbacks.Callback):
         # precision = 3
         # floored_max = my_floor(max_pred, precision)
         # thresh = sorted(floored_max + np.linspace(0, 1, 11) / 10**precision)
-        thresh = np.linspace(0, 1, 11)
+        thresh = np.linspace(0.8, 1, 11)
         fig = generate_img_of_decodings_expanded(val_true, val_predict, thresh)
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
@@ -399,7 +435,7 @@ if mpath.exists():
 
 mpath = pathlib.Path("models/3d_autoencoder.h5")
 if mpath.exists():
-    autoencoder = tf.keras.models.load_model(mpath, compile=False, custom_objects={'WeightedBinaryCrossEntropy': WeightedBinaryCrossEntropy(penalty), 'penalty':penalty})
+    autoencoder = tf.keras.models.load_model(mpath, compile=False, custom_objects={'WeightedBinaryCrossEntropy': WeightedBinaryCrossEntropy(penalty), 'penalty': penalty})
 
 # %%
 
@@ -412,4 +448,3 @@ decodings = decoder.predict(z).reshape(test_sample.shape[:-1])
 # %%
 generate_img_of_decodings(originals, decodings, thresh=.7)
 plt.show()
-
