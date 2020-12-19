@@ -52,6 +52,7 @@ import tensorflow as tf
 import pickle
 import pyvista as pv
 from pyntcloud import PyntCloud
+from tensorflow.python.keras.backend import dtype
 from tensorflow.python.keras.engine.base_layer import Layer
 from tqdm import tqdm
 import pandas as pd
@@ -211,6 +212,12 @@ tf.config.run_functions_eagerly(True)
 
 
 # %% [markdown]
+# These are just abstractions of the main processing units. The setup is very common.
+# A convolution, then a dropout and afterwards normalisation. The order or even whether to use this setup is hotly debated.
+# Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/](this)
+# I might drop the dropout layer in the future as it seems to have fallen from grace. 
+
+
 class EncoderUnit(Layer):
     def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
         super(EncoderUnit, self).__init__(name=name, **kwargs)
@@ -220,7 +227,7 @@ class EncoderUnit(Layer):
                                   strides=2,
                                   padding='same',
                                   kernel_regularizer=reg.L1L2(.1, .1))
-        self.drop = layers.Dropout(.5)
+        # self.drop = layers.Dropout(.5)
         self.norm = layers.BatchNormalization()
 
     def call(self, inputs, **kwargs):
@@ -248,8 +255,12 @@ class DecoderUnit(Layer):
         x = self.norm(x)
         return x
 
+# %% [markdown]
+# These are the models. I also created a dedicated sampling layer, because I want to expand this approach to variational autoencoders in the future.
+# I don't think they are very comlicated to understand, given that I have abtracted the processing units away. Another point is, that both are models on their own. Programmatically, there is almost no difference. 
+# However, if you want to print their structure with the summary method, most of the model will become hidden from you and summarized as  
 
-class Encoder(Model):
+class Encoder(Layer):
     def __init__(self, data_shape, output_dim=8, EncoderUnit=EncoderUnit, name="encoder", **kwargs):
         super(Encoder, self).__init__(name=name, **kwargs)
         self.data_shape = data_shape
@@ -266,9 +277,10 @@ class Encoder(Model):
         x = inputs
         for layer in self.elayers:
             x = layer(x)
-        self.bridging_shape = list(x.shape[1:])
+        
+        # print(self.bridging_shape)
         z = self.sampler(x)
-        return z, self.bridging_shape
+        return z, x
 
 
 class Sampling(Layer):
@@ -285,13 +297,10 @@ class Sampling(Layer):
         return z
 
 
-class Decoder(Model):
-    def __init__(self, original_shape, bridging_shape, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
+class Decoder(Layer):
+    def __init__(self, original_shape, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
         super(Decoder, self).__init__(name=name, **kwargs)
         self.original_shape = original_shape
-        self.bridging_shape = bridging_shape
-        self.receiver = layers.Dense(np.prod(bridging_shape), kernel_regularizer=reg.L1L2(.1, .1))
-        self.unflattener = layers.Reshape(bridging_shape)
         self.dlayers = [
             DecoderUnit(64),
             DecoderUnit(48),
@@ -300,10 +309,16 @@ class Decoder(Model):
         ]
         self.final_decoding = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")
 
-        # self.run_layers = functools.reduce(lambda x, y: y(x), self.layers)
+    def build(self, input_shape):
+        in_shape = np.prod(input_shape[1][1:])
+        bridging_shape = input_shape[1][1:]
+        self.receiver = layers.Dense(in_shape, kernel_regularizer=reg.L1L2(.1, .1))
+        self.unflattener = layers.Reshape(bridging_shape)
+
 
     def call(self, inputs, **kwargs):
-        x = self.receiver(inputs)
+        embedding, pre_embedding = inputs
+        x = self.receiver(embedding)
         x = self.unflattener(x)
         for layer in self.dlayers:
             x = layer(x)
@@ -311,6 +326,9 @@ class Decoder(Model):
         return decoder_outputs
 
 
+## %% [markdown]
+# This brings all together. This is also very straightforward, except for the build part. 
+# Why would I build the encoder prematurely. The issue is that it seems quite complicated to transfer the resulting shape of one model or layer to another.  
 class AutoEncoder(Model):
     def __init__(self, data_shape, output_dim=300, verbose=False, name="autoencoder", **kwargs):
         super(AutoEncoder, self).__init__(name=name, **kwargs)
@@ -318,20 +336,22 @@ class AutoEncoder(Model):
         self.in_shape = (None, ) + self.original_shape
         self.output_dim = output_dim
         self.encoder = Encoder(self.original_shape, self.output_dim)
-        self.encoder.build(self.in_shape)
-        self.decoder = Decoder(self.original_shape, self.encoder.bridging_shape)
+        # self.encoder.build(self.in_shape)
+        self.decoder = Decoder(self.original_shape)
 
     def call(self, inputs, **kwargs):
         x = layers.InputLayer(self.original_shape)(inputs)
-        z, bridging_shape = self.encoder(x)
-        x = layers.InputLayer(self.original_shape)(z)
-        decodings = self.decoder(x, bridging_shape=bridging_shape)
+        z, x = self.encoder(x)
+        z = layers.InputLayer(self.original_shape)(z)
+        print([z, x])
+        decodings = self.decoder([z, x])
         return decodings
 
     def summary(self, line_length=None, positions=None, print_fn=None):
+        print((None, ) + self.original_shape)
         self.build((None, ) + self.original_shape)
-        self.encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
-        self.decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+        # self.encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+        # self.decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
         return super().summary(line_length=line_length, positions=positions, print_fn=print_fn)
 
 
@@ -376,10 +396,10 @@ def _rebase(x1, x2, min_val, max_val):
 # if verbose > 0:
 penalty = .90
 learning_rate = 0.01
-comment = "refactored run"
+comment = "refactored no dropout"
 lbound, ubound = -1, 2
 batch_size = 5
-output_dim = 300
+output_dim = 100
 
 autoencoder = AutoEncoder(data_shape=data_shape, output_dim=output_dim, verbose=2)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)
