@@ -80,10 +80,10 @@ if gpus:
     except RuntimeError as e:
         print(e)
 
-
 # %% [markdown]
 # I've defined a couple of functions that will be used below.
 # Most of them only deal with plotting
+
 
 def compose(f, g):
     return lambda arg: f(g(arg))
@@ -144,7 +144,8 @@ def plot_pointcound(pynt_cloud_object, n=32):
 
 
 # %% [markdown]
-# Because I only have polygon meshes of the data, I decided to opt for a library to convert those to voxel representations. 
+# ## Data preprocessing
+# Because I only have polygon meshes of the data, I decided to opt for a library to convert those to voxel representations.
 # The library is called [https://github.com/daavoo/pyntcloud](pyntcloud).
 
 path_to_dataset = pathlib.Path("data/dataset.pkl")
@@ -178,7 +179,7 @@ plot_pointcound(point_cloud_dataset_collected[4], 64)
 # Here, I convert all voxels to a numpy matrix with dimensions: [N, 32, 32, 32, 1]
 #
 # Intuitively you can understand N as number of voxels and the 1 is "like" the color channel for the 2D image case.
-#     
+#
 path_to_voxel_matrix = pathlib.Path("data/dataset_voxels.npz")
 data = None
 if path_to_voxel_matrix.exists():
@@ -196,26 +197,33 @@ f"Loaded voxel data for {num_meshes} meshes"
 
 # %% [markdown]
 # By know, this should be fairly clear.
-#   
+#
 cut_point = .1
 x_train, x_test = train_test_split(data.astype(np.float), shuffle=True, test_size=.1)
 f"Training: {x_train.shape} | Test: {x_test.shape}"
 
+
+
 # %% [markdown]
-# This is where the model starts. To step up the game, I used subclassing to modularized the model and make it seem cleaner. 
-# 
-# I was inspired by following resources 
+# ## The model building blocks
+# This is where the model starts. To step up the game, I used subclassing to modularized the model and make it seem cleaner.
+#
+# I was inspired by following resources
 # - https://stackoverflow.com/a/58526969/4162265
 # - https://www.tensorflow.org/guide/keras/custom_layers_and_models#putting_it_all_together_an_end-to-end_example
-
-tf.config.run_functions_eagerly(True)
-
+# 
+# I took most of the conceptual ideas from the paper that inspired this code:
+# [http://arxiv.org/abs/1608.04236](Generative and Discriminative Voxel Modeling with Convolutional Neural Networks) by Brock et. al.
+# Luckily he provides a quick run down in a [https://www.youtube.com/watch?v=LtpU1yBStlU](video)
+# I also took inspiration from his code on [https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling](Github) in order to understand and debug. 
+# (But this is for rather advanced Python coders as you might not get everything immediately. The code is written in a framework I don't really know called Lasagne. It is based on Theano. So there was little copy pasting here possible.)
+#
 
 # %% [markdown]
 # These are just abstractions of the main processing units. The setup is very common.
 # A convolution, then a dropout and afterwards normalisation. The order or even whether to use this setup is hotly debated.
 # Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/](this)
-# I might drop the dropout layer in the future as it seems to have fallen from grace. 
+# I might drop the dropout layer in the future as it seems to have fallen from grace.
 
 
 class EncoderUnit(Layer):
@@ -232,7 +240,7 @@ class EncoderUnit(Layer):
 
     def call(self, inputs, **kwargs):
         x = self.conv(inputs)
-        x = self.drop(x)
+        # x = self.drop(x)
         x = self.norm(x)
         return x
 
@@ -246,41 +254,14 @@ class DecoderUnit(Layer):
                                            strides=2,
                                            padding="same",
                                            kernel_regularizer=reg.L1L2(.1, .1))
-        self.drop = layers.Dropout(.5)
+        # self.drop = layers.Dropout(.5)
         self.norm = layers.BatchNormalization()
 
     def call(self, inputs, **kwargs):
         x = self.conv(inputs)
-        x = self.drop(x)
+        # x = self.drop(x)
         x = self.norm(x)
         return x
-
-# %% [markdown]
-# These are the models. I also created a dedicated sampling layer, because I want to expand this approach to variational autoencoders in the future.
-# I don't think they are very comlicated to understand, given that I have abtracted the processing units away. Another point is, that both are models on their own. Programmatically, there is almost no difference. 
-# However, if you want to print their structure with the summary method, most of the model will become hidden from you and summarized as  
-
-class Encoder(Layer):
-    def __init__(self, data_shape, output_dim=8, EncoderUnit=EncoderUnit, name="encoder", **kwargs):
-        super(Encoder, self).__init__(name=name, **kwargs)
-        self.data_shape = data_shape
-        self.output_dim = output_dim
-        self.elayers = [
-            EncoderUnit(16),
-            EncoderUnit(32),
-            EncoderUnit(48),
-            EncoderUnit(64),
-        ]
-        self.sampler = Sampling(self.output_dim)
-
-    def call(self, inputs, **kwargs):
-        x = inputs
-        for layer in self.elayers:
-            x = layer(x)
-        
-        # print(self.bridging_shape)
-        z = self.sampler(x)
-        return z, x
 
 
 class Sampling(Layer):
@@ -297,66 +278,20 @@ class Sampling(Layer):
         return z
 
 
-class Decoder(Layer):
-    def __init__(self, original_shape, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
-        super(Decoder, self).__init__(name=name, **kwargs)
-        self.original_shape = original_shape
-        self.dlayers = [
-            DecoderUnit(64),
-            DecoderUnit(48),
-            DecoderUnit(32),
-            DecoderUnit(16),
-        ]
-        self.final_decoding = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")
-
-    def build(self, input_shape):
-        in_shape = np.prod(input_shape[1][1:])
-        bridging_shape = input_shape[1][1:]
-        self.receiver = layers.Dense(in_shape, kernel_regularizer=reg.L1L2(.1, .1))
-        self.unflattener = layers.Reshape(bridging_shape)
-
-
-    def call(self, inputs, **kwargs):
-        embedding, pre_embedding = inputs
-        x = self.receiver(embedding)
-        x = self.unflattener(x)
-        for layer in self.dlayers:
-            x = layer(x)
-        decoder_outputs = self.final_decoding(x)
-        return decoder_outputs
-
-
-## %% [markdown]
-# This brings all together. This is also very straightforward, except for the build part. 
-# Why would I build the encoder prematurely. The issue is that it seems quite complicated to transfer the resulting shape of one model or layer to another.  
-class AutoEncoder(Model):
-    def __init__(self, data_shape, output_dim=300, verbose=False, name="autoencoder", **kwargs):
-        super(AutoEncoder, self).__init__(name=name, **kwargs)
-        self.original_shape = data_shape
-        self.in_shape = (None, ) + self.original_shape
-        self.output_dim = output_dim
-        self.encoder = Encoder(self.original_shape, self.output_dim)
-        # self.encoder.build(self.in_shape)
-        self.decoder = Decoder(self.original_shape)
-
-    def call(self, inputs, **kwargs):
-        x = layers.InputLayer(self.original_shape)(inputs)
-        z, x = self.encoder(x)
-        z = layers.InputLayer(self.original_shape)(z)
-        print([z, x])
-        decodings = self.decoder([z, x])
-        return decodings
-
-    def summary(self, line_length=None, positions=None, print_fn=None):
-        print((None, ) + self.original_shape)
-        self.build((None, ) + self.original_shape)
-        # self.encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
-        # self.decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
-        return super().summary(line_length=line_length, positions=positions, print_fn=print_fn)
+# %% [markdown]
+# I will also use a custom loss function. The reason here is, that all that we want is predict whether the cell in question has its voxel filled or not.
+# Remember, we only have one color &mdash; grey. And we don't even want anything between this color spectrum. What we want is either black or white. Absolute certainty for any of those.
+#
+# This makes our problem a high dimensional binary classification task. Hence, you would use binary-cross-entropy in that case.
+# However, there's a catch: Most of our data is probably pretty empty. It would be easy for the model to just predict everything is empty.
+# That's called "getting stuck in a local optimum". Pretty unfortunate, if that optimum is a very bad one.
+#
+# The solution is weighting correctly predicted cells that are empty less than hitting a filled cell.
+# Additionally, I decided to not take the mean of the sum, because this does not produce a large flow of loss back into the model. Or at least that was my intuition. 
+# The general design for the code was taken from [https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x](here) 
 
 
 class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
-    # https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x
     """
     Args:
     pos_weight: Scalar to affect the positive labels of the loss function.
@@ -387,13 +322,122 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         return clipped_y_pred
 
 
+# %% [markdown]
+# ## Model definitions for encoding and decoding
+# The next part introduces the models. I also created a dedicated sampling layer, because I want to expand this approach to variational autoencoders in the future.
+# I don't think they are very comlicated to understand, given that I have abtracted the processing units away.
+
+# %% [markdown]
+# What's important in the encoder is that I return the last layer which is flattend AND the previous layer which is unflattend. 
+# With this approach, I can bridge shapes onto the decoder.
+
+
+class Encoder(Model):
+    def __init__(self, data_shape, output_dim=8, EncoderUnit=EncoderUnit, name="encoder", **kwargs):
+        super(Encoder, self).__init__(name=name, **kwargs)
+        self.data_shape = data_shape
+        self.output_dim = output_dim
+        self.elayers = [
+            EncoderUnit(16),
+            EncoderUnit(32),
+            EncoderUnit(48),
+            EncoderUnit(64),
+        ]
+        self.sampler = Sampling(self.output_dim)
+
+    def call(self, inputs, **kwargs):
+        x = inputs
+        for layer in self.elayers:
+            x = layer(x)
+
+        # print(self.bridging_shape)
+        z = self.sampler(x)
+        return z, x
+
+
+# %% [markdown]
+# The decoder, on the other hand, builds two of his layers slightly after initialization. With this I can slightly defer the creation of these layers.
+# Why not in the call method then? I tried that, but it seems that TF or Keras does not recognize layers in the call method as trainable layers.
+# Hence, you will see a difference in number of training params if you do so nonetheless.
+
+
+class Decoder(Model):
+    def __init__(self, original_shape, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
+        super(Decoder, self).__init__(name=name, **kwargs)
+        self.original_shape = original_shape
+        self.dlayers = [
+            DecoderUnit(64),
+            DecoderUnit(48),
+            DecoderUnit(32),
+            DecoderUnit(16),
+        ]
+        self.final_decoding = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")
+
+    def build(self, input_shape):
+        in_shape = np.prod(input_shape[1][1:])
+        bridging_shape = input_shape[1][1:]
+        self.receiver = layers.Dense(in_shape, kernel_regularizer=reg.L1L2(.1, .1))
+        self.unflattener = layers.Reshape(bridging_shape)
+
+    def call(self, inputs, **kwargs):
+        embedding, pre_embedding = inputs
+        x = self.receiver(embedding)
+        x = self.unflattener(x)
+        for layer in self.dlayers:
+            x = layer(x)
+        decoder_outputs = self.final_decoding(x)
+        return decoder_outputs
+
+
+# %% [markdown]
+# Another point is, that both are models on their own, instead of specialized layers.
+# There is almost no difference, other than that making a summary of customized layers is quite complicated.
+# Most of the model summary will become hidden from you and replace by output shape "multiple".
+# However, if encoder and decoder are models themselves, that issue becomes a matter of overwriting the default summary function.
+#
+# If you don't get what I mean just switch Encoder(Model) to Encoder(Layer) and you will notice.
+
+
+# %% [markdown]
+# This code brings all together. With all the modularisation from beforehand it should be very straightforward.
+class AutoEncoder(Model):
+    def __init__(self, data_shape, output_dim=300, verbose=False, name="autoencoder", **kwargs):
+        super(AutoEncoder, self).__init__(name=name, **kwargs)
+        self.original_shape = data_shape
+        self.in_shape = (None, ) + self.original_shape
+        self.output_dim = output_dim
+        self.encoder = Encoder(self.original_shape, self.output_dim)
+        self.decoder = Decoder(self.original_shape)
+
+    def call(self, inputs, **kwargs):
+        x = layers.InputLayer(self.original_shape)(inputs)
+        z, x = self.encoder(x)
+        z = layers.InputLayer(self.original_shape)(z)
+        decodings = self.decoder([z, x])
+        return decodings
+
+    def summary(self, line_length=None, positions=None, print_fn=None):
+        self.build((None, ) + self.original_shape)
+        self.encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+        self.decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+        return super().summary(line_length=line_length, positions=positions, print_fn=print_fn)
+
+
+# %% [markdown]
+# I create a function that rescales the values in the data to a range that I see fit.
+# The reason is that Brock et al. found out that that a modification boosts the models performance significantly.
+# If you use tensorboard, you can view the output distributions of the predictions. 
+# They will shows you how the model either predicts one or another value in the decoding phase. 
+# For more on this, read the paper. It is pretty easy to understand.
+#   
+
 def _rebase(x1, x2, min_val, max_val):
     x1 = (x1 * (max_val - min_val)) + min_val
     x2 = (x2 * (max_val - min_val)) + min_val
     return x1, x2
 
-
-# if verbose > 0:
+# %% [markdown]
+# Hyperparams. This needs no explanation.
 penalty = .90
 learning_rate = 0.01
 comment = "refactored no dropout"
@@ -413,10 +457,9 @@ x_train_mod, y_train_mod = _rebase(x_train, x_train, 0, 1)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
-# x_train_mod, _ = _rebase(x_train, x_test, lbound, ubound)
-# y_train_mod, _ = _rebase(x_train, x_test, 0, 1)
 
-
+# %% [markdown]
+# Some minor stuff with regards to tensorboard. This code helped debugging my model.
 def construct_log_dir(elements=[]):
     log_dir = f"logs/{datetime.now().strftime('%m%d%H%M%S')}/" + "-".join(elements)
     return log_dir
@@ -506,8 +549,13 @@ file_writer = tf.summary.create_file_writer(log_dir)
 file_writer.set_as_default()
 tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
 lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
+
 validation_data = (x_test_mod, y_test_mod)
 image_log_callback = CustomCallback(validation_data, penalty=penalty)
+
+# %% [markdown]
+# Alright let's go!
+
 history = autoencoder.fit(
     x_train_mod,
     y_train_mod,
