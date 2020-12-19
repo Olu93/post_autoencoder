@@ -1,5 +1,47 @@
-# https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling/tree/master/Generative
-# https://github.com/AnTao97/PointCloudDatasets/blob/master/dataset.py
+# %% [markdown]
+## 3D Convolutional autoencoder for voxel data!
+#
+# This code shows the example of a 3D convolution autoencoder applied on ModelNet40 and PSB datasets.
+# It is the natural extension of [./2d_autoencoder.ipynb](Part 1) of this series.
+#
+# These links complement the ones introduced in Part 1:
+# - https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling/tree/master/Generative
+# - https://github.com/AnTao97/PointCloudDatasets/blob/master/dataset.py
+
+# %% [markdown]
+# ## Background
+
+# This part of the series needs a bit more explaination. So far, there haven't been many attempts to use CNN's for 3D objects. Why? Probably because of the representation that would be required for a vanilla CNN to work without many changes.
+
+# ### Pixels and Voxels
+
+# The logical 3D extenstion of a 2D image would be a 3D grid, because an image is essentially a 2D grid with each cell representing a pixel. In the same manner 3D cells in a 3D grid are called voxels. In both cases, pixels and voxels are somewhat abstract containers that hold values. We typically think pixels strictly contain only color values but they can hold much more information. Opacity is an intuitive example, but we could even save meta-data in there. That was just for the intuition. Voxels are pretty common within neuroscience and obviously game technology.
+
+# ### Voxels and Convolutions
+
+# After this description it might be trivial, but we can extend the intuition about convolutions easily onto the next dimension. While we convolve for with a restricted set of 2D filters over images, we do the same with 3D objects. This time, we only imagine cubes instead of squares. In fact, many of you who have already used CNN's know, that this is already common practice, as we treat colors often as that third dimension. This flexibility ties back to the idea that these cells are merely containers and the dimensions can represent anything.
+
+# ### So far so good... But what's the issue with those?
+
+# Well, neither am I well acquainted with Game-Technology nor do I have a background in Computer Graphics. However, from what I understand, there are about X reasons:
+
+# - First, voxel data is exponentially larger than pixel data, given the added dimension. Meaning, that you now need to deal with more data and all of it. If you just care about simple singular 3D models, most of the volume might be empty.
+
+# - Second, depending on your resolution (which directly affects the data volume), things can become quite minecrafty.
+
+# - Third, there are alternatives: Point clouds and polygons. Both are vector-based and the ladder even maintains structure.
+
+# ### Why still use voxels then?
+
+# They obviously also have advantages. They maintain structure, they are easy to process in computer graphics, they are great for procedural generation. Some of the algorythms for images like JPEG are easy to extend.
+
+# ### Links
+
+# For more about these matters checkout following materials:
+
+# - [https://medium.com/@EightyLevel/how-voxels-became-the-next-big-thing-4eb9665cd13a](An explanation for voxels imminent comeback in Gaming. May be a bit difficult to follow.)
+# - [https://www.quora.com/What-are-the-pros-and-cons-of-using-voxels-instead-of-polygons](Best explanation that I found on this topic. Also videogame centric.)
+
 # %%
 from datetime import datetime
 from enum import auto
@@ -38,7 +80,10 @@ if gpus:
         print(e)
 
 
-# %%
+# %% [markdown]
+# I've defined a couple of functions that will be used below.
+# Most of them only deal with plotting
+
 def compose(f, g):
     return lambda arg: f(g(arg))
 
@@ -97,7 +142,10 @@ def plot_pointcound(pynt_cloud_object, n=32):
     return example_voxelgrid.plot(d=3, mode="binary", cmap="hsv", width=400, height=400)
 
 
-# %%
+# %% [markdown]
+# Because I only have polygon meshes of the data, I decided to opt for a library to convert those to voxel representations. 
+# The library is called [https://github.com/daavoo/pyntcloud](pyntcloud).
+
 path_to_dataset = pathlib.Path("data/dataset.pkl")
 point_cloud_dataset_collected = None
 num_meshes = None
@@ -113,17 +161,31 @@ if not path_to_dataset.exists():
     pickle.dump(file=io.open(path_to_dataset, "wb"), obj=point_cloud_dataset_collected)
     print(f"Loaded point clouds for {num_meshes} meshes")
 
-# %%
-plot_pointcound(point_cloud_dataset_collected[4])
+# %% [markdown]
+# Let's see what we got. I used 32 as a default cell count in all dimensions.
+# 32 is just an arbitrary number I chose. Obviously, the more the more fine grained the images but the more data to process.
+plot_pointcound(point_cloud_dataset_collected[4], 32)
 
-# %%
+# %% [markdown]
+# Let's check out what we retrieve with a lower resolution
+plot_pointcound(point_cloud_dataset_collected[4], 8)
+# %% [markdown]
+# Now with a higher one
+plot_pointcound(point_cloud_dataset_collected[4], 64)
+
+# %% [markdown]
+# Here, I convert all voxels to a numpy matrix with dimensions: [N, 32, 32, 32, 1]
+#
+# Intuitively you can understand N as number of voxels and the 1 is "like" the color channel for the 2D image case.
+#     
 path_to_voxel_matrix = pathlib.Path("data/dataset_voxels.npz")
 data = None
 if path_to_voxel_matrix.exists():
     data = np.load(path_to_voxel_matrix)["data"]
 
 if not path_to_voxel_matrix.exists():
-    voxel_data_generator = (retrieve_voxel_data(cloud, 32) for cloud in tqdm(point_cloud_dataset_collected, total=num_meshes))
+    voxel_data_generator = (retrieve_voxel_data(cloud, 32)
+                            for cloud in tqdm(point_cloud_dataset_collected, total=num_meshes))
     voxel_data_collected = list(voxel_data_generator)
     voxel_data = np.array([item[0] for item in voxel_data_collected])
     data = voxel_data.reshape(voxel_data.shape + (1, ))
@@ -131,21 +193,33 @@ if not path_to_voxel_matrix.exists():
 data_shape = data.shape[1:]
 f"Loaded voxel data for {num_meshes} meshes"
 
-# %%
+# %% [markdown]
+# By know, this should be fairly clear.
+#   
 cut_point = .1
 x_train, x_test = train_test_split(data.astype(np.float), shuffle=True, test_size=.1)
 f"Training: {x_train.shape} | Test: {x_test.shape}"
 
-# %%
-# https://stackoverflow.com/a/58526969/4162265
-# https://www.tensorflow.org/guide/keras/custom_layers_and_models#putting_it_all_together_an_end-to-end_example
+# %% [markdown]
+# This is where the model starts. To step up the game, I used subclassing to modularized the model and make it seem cleaner. 
+# 
+# I was inspired by following resources 
+# - https://stackoverflow.com/a/58526969/4162265
+# - https://www.tensorflow.org/guide/keras/custom_layers_and_models#putting_it_all_together_an_end-to-end_example
+
 tf.config.run_functions_eagerly(True)
 
 
+# %% [markdown]
 class EncoderUnit(Layer):
     def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
         super(EncoderUnit, self).__init__(name=name, **kwargs)
-        self.conv = layers.Conv3D(num_filters, 3, activation='elu', strides=2, padding='same', kernel_regularizer=reg.L1L2(.1, .1))
+        self.conv = layers.Conv3D(num_filters,
+                                  3,
+                                  activation='elu',
+                                  strides=2,
+                                  padding='same',
+                                  kernel_regularizer=reg.L1L2(.1, .1))
         self.drop = layers.Dropout(.5)
         self.norm = layers.BatchNormalization()
 
@@ -159,7 +233,12 @@ class EncoderUnit(Layer):
 class DecoderUnit(Layer):
     def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
         super(DecoderUnit, self).__init__(name=name, **kwargs)
-        self.conv = layers.Conv3DTranspose(num_filters, 3, activation="elu", strides=2, padding="same", kernel_regularizer=reg.L1L2(.1, .1))
+        self.conv = layers.Conv3DTranspose(num_filters,
+                                           3,
+                                           activation="elu",
+                                           strides=2,
+                                           padding="same",
+                                           kernel_regularizer=reg.L1L2(.1, .1))
         self.drop = layers.Dropout(.5)
         self.norm = layers.BatchNormalization()
 
@@ -242,7 +321,6 @@ class AutoEncoder(Model):
         self.encoder.build(self.in_shape)
         self.decoder = Decoder(self.original_shape, self.encoder.bridging_shape)
 
-
     def call(self, inputs, **kwargs):
         x = layers.InputLayer(self.original_shape)(inputs)
         z, bridging_shape = self.encoder(x)
@@ -278,7 +356,8 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
     def wbce(y_true, y_pred, penalty):
         penalty *= 100
         clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-7, 1.0 - 1e-7)
-        binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
+        binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) *
+                                 (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
         loss = tf.reduce_sum(binary_cross_entropy)
         return loss, binary_cross_entropy
 
@@ -319,7 +398,7 @@ x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 
 
 def construct_log_dir(elements=[]):
-    log_dir = f"logs/{datetime.now().strftime('%m%d%H%M%S')}/" + " - ".join(elements)
+    log_dir = f"logs/{datetime.now().strftime('%m%d%H%M%S')}/" + "-".join(elements)
     return log_dir
 
 
@@ -328,6 +407,7 @@ elems = [
     f"[{penalty:05.5f}]",
     f"[{learning_rate:07.7f}]",
     f"[{batch_size:02d}]",
+    f"[{output_dim:03d}]",
     f"{comment}" if comment else "NA",
 ]
 
@@ -380,7 +460,7 @@ class CustomCallback(tf.keras.callbacks.Callback):
         # precision = 3
         # floored_max = my_floor(max_pred, precision)
         # thresh = sorted(floored_max + np.linspace(0, 1, 11) / 10**precision)
-        thresh = np.linspace(0.8, 1, 11)
+        thresh = np.linspace(0.5, 1, 11)
         fig = generate_img_of_decodings_expanded(val_true, val_predict, thresh)
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
@@ -411,7 +491,7 @@ image_log_callback = CustomCallback(validation_data, penalty=penalty)
 history = autoencoder.fit(
     x_train_mod,
     y_train_mod,
-    epochs=100,
+    epochs=25,
     batch_size=batch_size,
     shuffle=True,
     validation_data=validation_data,
@@ -421,8 +501,8 @@ history = autoencoder.fit(
         # tensorboard_callback,
     ])
 # %%
-encoder.save("models/3d_encoder.h5")
-decoder.save("models/3d_decoder.h5")
+# encoder.save("models/3d_encoder.h5")
+# decoder.save("models/3d_decoder.h5")
 autoencoder.save("models/3d_autoencoder.h5")
 # %%
 mpath = pathlib.Path("models/3d_encoder.h5")
@@ -435,16 +515,21 @@ if mpath.exists():
 
 mpath = pathlib.Path("models/3d_autoencoder.h5")
 if mpath.exists():
-    autoencoder = tf.keras.models.load_model(mpath, compile=False, custom_objects={'WeightedBinaryCrossEntropy': WeightedBinaryCrossEntropy(penalty), 'penalty': penalty})
+    autoencoder = tf.keras.models.load_model(mpath,
+                                             compile=False,
+                                             custom_objects={
+                                                 'WeightedBinaryCrossEntropy': WeightedBinaryCrossEntropy(penalty),
+                                                 'penalty': penalty
+                                             })
 
 # %%
 
 n = 5
 test_sample = np.array(random.sample(list(x_train), n))
-z = encoder.predict(test_sample)
+z = autoencoder.encoder.predict(test_sample)
 
 originals = test_sample.reshape(test_sample.shape[:-1])
-decodings = decoder.predict(z).reshape(test_sample.shape[:-1])
+decodings = autoencoder.decoder.predict(z).reshape(test_sample.shape[:-1])
 # %%
 generate_img_of_decodings(originals, decodings, thresh=.7)
 plt.show()
