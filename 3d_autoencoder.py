@@ -236,7 +236,7 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + 2 * (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
         penalty *= 100
-        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-7, 1.0 - 1e-7)
+        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-3, 1.0 - 1e-3)
         binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
         loss = tf.reduce_sum(binary_cross_entropy)
         return loss, binary_cross_entropy
