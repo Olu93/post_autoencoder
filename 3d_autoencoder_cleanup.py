@@ -225,6 +225,7 @@ f"Training: {x_train.shape} | Test: {x_test.shape}"
 # Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/](this)
 # I might drop the dropout layer in the future as it seems to have fallen from grace.
 
+WITH_DROP = True
 
 class EncoderUnit(Layer):
     def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
@@ -235,12 +236,13 @@ class EncoderUnit(Layer):
                                   strides=2,
                                   padding='same',
                                   kernel_regularizer=reg.L1L2(.1, .1))
-        # self.drop = layers.Dropout(.5)
+        self.drop = layers.Dropout(.5)
         self.norm = layers.BatchNormalization()
 
     def call(self, inputs, **kwargs):
         x = self.conv(inputs)
-        # x = self.drop(x)
+        if WITH_DROP:
+            x = self.drop(x)
         x = self.norm(x)
         return x
 
@@ -254,12 +256,13 @@ class DecoderUnit(Layer):
                                            strides=2,
                                            padding="same",
                                            kernel_regularizer=reg.L1L2(.1, .1))
-        # self.drop = layers.Dropout(.5)
+        self.drop = layers.Dropout(.5)
         self.norm = layers.BatchNormalization()
 
     def call(self, inputs, **kwargs):
         x = self.conv(inputs)
-        # x = self.drop(x)
+        if WITH_DROP:
+            x = self.drop(x)        
         x = self.norm(x)
         return x
 
@@ -278,7 +281,7 @@ class Sampling(Layer):
         return z
 
 
-# %% [markdown]
+## %% [markdown]
 # I will also use a custom loss function. The reason here is, that all that we want is predict whether the cell in question has its voxel filled or not.
 # Remember, we only have one color &mdash; grey. And we don't even want anything between this color spectrum. What we want is either black or white. Absolute certainty for any of those.
 #
@@ -322,12 +325,12 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         return clipped_y_pred
 
 
-# %% [markdown]
+## %% [markdown]
 # ## Model definitions for encoding and decoding
 # The next part introduces the models. I also created a dedicated sampling layer, because I want to expand this approach to variational autoencoders in the future.
 # I don't think they are very comlicated to understand, given that I have abtracted the processing units away.
 
-# %% [markdown]
+## %% [markdown]
 # What's important in the encoder is that I return the last layer which is flattend AND the previous layer which is unflattend. 
 # With this approach, I can bridge shapes onto the decoder.
 
@@ -355,7 +358,7 @@ class Encoder(Model):
         return z, x
 
 
-# %% [markdown]
+## %% [markdown]
 # The decoder, on the other hand, builds two of his layers slightly after initialization. With this I can slightly defer the creation of these layers.
 # Why not in the call method then? I tried that, but it seems that TF or Keras does not recognize layers in the call method as trainable layers.
 # Hence, you will see a difference in number of training params if you do so nonetheless.
@@ -380,7 +383,7 @@ class Decoder(Model):
         self.unflattener = layers.Reshape(bridging_shape)
 
     def call(self, inputs, **kwargs):
-        embedding, pre_embedding = inputs
+        embedding, _ = inputs
         x = self.receiver(embedding)
         x = self.unflattener(x)
         for layer in self.dlayers:
@@ -389,7 +392,7 @@ class Decoder(Model):
         return decoder_outputs
 
 
-# %% [markdown]
+## %% [markdown]
 # Another point is, that both are models on their own, instead of specialized layers.
 # There is almost no difference, other than that making a summary of customized layers is quite complicated.
 # Most of the model summary will become hidden from you and replace by output shape "multiple".
@@ -398,7 +401,7 @@ class Decoder(Model):
 # If you don't get what I mean just switch Encoder(Model) to Encoder(Layer) and you will notice.
 
 
-# %% [markdown]
+## %% [markdown]
 # This code brings all together. With all the modularisation from beforehand it should be very straightforward.
 class AutoEncoder(Model):
     def __init__(self, data_shape, output_dim=300, verbose=False, name="autoencoder", **kwargs):
@@ -423,7 +426,7 @@ class AutoEncoder(Model):
         return super().summary(line_length=line_length, positions=positions, print_fn=print_fn)
 
 
-# %% [markdown]
+## %% [markdown]
 # I create a function that rescales the values in the data to a range that I see fit.
 # The reason is that Brock et al. found out that that a modification boosts the models performance significantly.
 # If you use tensorboard, you can view the output distributions of the predictions. 
@@ -436,14 +439,14 @@ def _rebase(x1, x2, min_val, max_val):
     x2 = (x2 * (max_val - min_val)) + min_val
     return x1, x2
 
-# %% [markdown]
+## %% [markdown]
 # Hyperparams. This needs no explanation.
 penalty = .90
 learning_rate = 0.01
 comment = "refactored no dropout"
 lbound, ubound = -1, 2
-batch_size = 5
-output_dim = 100
+batch_size = 4
+output_dim = 300
 
 autoencoder = AutoEncoder(data_shape=data_shape, output_dim=output_dim, verbose=2)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)

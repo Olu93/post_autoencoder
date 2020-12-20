@@ -263,11 +263,11 @@ decoder.summary()
 autoencoder = Model(x, decoder(encoder(x)))
 autoencoder.summary()
 # %%
-penalty = .95
+penalty = .97
 learning_rate = 0.01
 comment = "serious run"
 lbound, ubound = -1, 2
-batch_size = 4
+batch_size = 5
 
 loss_fn = generate_loss_function(penalty)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)
