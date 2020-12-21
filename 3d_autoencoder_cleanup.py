@@ -123,7 +123,7 @@ def generate_img_of_decodings_expanded(encodings, decodings, thresholds=[.9, .95
     rows = 1
     fig = plt.figure(figsize=(25, 5))
     n = len(thresholds) + 1
-
+    encoding_res = len(encodings[0])
     ax = fig.add_subplot(rows, n, 1, projection='3d')
     elem1 = np.argwhere(encodings[0])
     ax.set_title("Original")
@@ -131,7 +131,10 @@ def generate_img_of_decodings_expanded(encodings, decodings, thresholds=[.9, .95
     for i, tresh in enumerate(thresholds):
         cnt = i + 1
         ax = fig.add_subplot(rows, n, cnt + 1, projection='3d')
-        ax.set_title(f"> {tresh:05}")
+        ax.set_title(f"> {tresh:05.5f}")
+        ax.set_xlim(0, encoding_res)
+        ax.set_ylim(0, encoding_res)
+        ax.set_zlim(0, encoding_res)
         elem2 = np.argwhere(decodings[0] >= tresh)
         ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
 
@@ -202,8 +205,6 @@ cut_point = .1
 x_train, x_test = train_test_split(data.astype(np.float), shuffle=True, test_size=.1)
 f"Training: {x_train.shape} | Test: {x_test.shape}"
 
-
-
 # %% [markdown]
 # ## The model building blocks
 # This is where the model starts. To step up the game, I used subclassing to modularized the model and make it seem cleaner.
@@ -211,11 +212,11 @@ f"Training: {x_train.shape} | Test: {x_test.shape}"
 # I was inspired by following resources
 # - https://stackoverflow.com/a/58526969/4162265
 # - https://www.tensorflow.org/guide/keras/custom_layers_and_models#putting_it_all_together_an_end-to-end_example
-# 
+#
 # I took most of the conceptual ideas from the paper that inspired this code:
 # [http://arxiv.org/abs/1608.04236](Generative and Discriminative Voxel Modeling with Convolutional Neural Networks) by Brock et. al.
 # Luckily he provides a quick run down in a [https://www.youtube.com/watch?v=LtpU1yBStlU](video)
-# I also took inspiration from his code on [https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling](Github) in order to understand and debug. 
+# I also took inspiration from his code on [https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling](Github) in order to understand and debug.
 # (But this is for rather advanced Python coders as you might not get everything immediately. The code is written in a framework I don't really know called Lasagne. It is based on Theano. So there was little copy pasting here possible.)
 #
 
@@ -226,6 +227,7 @@ f"Training: {x_train.shape} | Test: {x_test.shape}"
 # I might drop the dropout layer in the future as it seems to have fallen from grace.
 
 WITH_DROP = True
+
 
 class EncoderUnit(Layer):
     def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
@@ -262,7 +264,7 @@ class DecoderUnit(Layer):
     def call(self, inputs, **kwargs):
         x = self.conv(inputs)
         if WITH_DROP:
-            x = self.drop(x)        
+            x = self.drop(x)
         x = self.norm(x)
         return x
 
@@ -290,8 +292,8 @@ class Sampling(Layer):
 # That's called "getting stuck in a local optimum". Pretty unfortunate, if that optimum is a very bad one.
 #
 # The solution is weighting correctly predicted cells that are empty less than hitting a filled cell.
-# Additionally, I decided to not take the mean of the sum, because this does not produce a large flow of loss back into the model. Or at least that was my intuition. 
-# The general design for the code was taken from [https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x](here) 
+# Additionally, I decided to not take the mean of the sum, because this does not produce a large flow of loss back into the model. Or at least that was my intuition.
+# The general design for the code was taken from [https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x](here)
 
 
 class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
@@ -303,17 +305,22 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
     reduction: Type of tf.keras.losses.Reduction to apply to loss.
     name: Name of the loss function.
     """
-    def __init__(self, penalty, reduction=tf.keras.losses.Reduction.AUTO, name='weighted_binary_crossentropy'):
+    def __init__(self,
+                 penalty,
+                 clip_margin=1e-3,
+                 reduction=tf.keras.losses.Reduction.AUTO,
+                 name='weighted_binary_crossentropy'):
         super().__init__(reduction=reduction, name=name)
         self.penalty = penalty
+        self.clip_margin = clip_margin
 
     def call(self, y_true, y_pred):
-        return WeightedBinaryCrossEntropy.wbce(y_true, y_pred, self.penalty)[0]
+        return WeightedBinaryCrossEntropy.wbce(y_true, y_pred, self.penalty, self.clip_margin)[0]
 
     @staticmethod
-    def wbce(y_true, y_pred, penalty):
+    def wbce(y_true, y_pred, penalty, clip_margin=1e-3):
         penalty *= 100
-        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-7, 1.0 - 1e-7)
+        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, clip_margin, 1.0 - clip_margin)
         binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) *
                                  (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
         loss = tf.reduce_sum(binary_cross_entropy)
@@ -331,7 +338,7 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
 # I don't think they are very comlicated to understand, given that I have abtracted the processing units away.
 
 ## %% [markdown]
-# What's important in the encoder is that I return the last layer which is flattend AND the previous layer which is unflattend. 
+# What's important in the encoder is that I return the last layer which is flattend AND the previous layer which is unflattend.
 # With this approach, I can bridge shapes onto the decoder.
 
 
@@ -429,27 +436,30 @@ class AutoEncoder(Model):
 ## %% [markdown]
 # I create a function that rescales the values in the data to a range that I see fit.
 # The reason is that Brock et al. found out that that a modification boosts the models performance significantly.
-# If you use tensorboard, you can view the output distributions of the predictions. 
-# They will shows you how the model either predicts one or another value in the decoding phase. 
+# If you use tensorboard, you can view the output distributions of the predictions.
+# They will shows you how the model either predicts one or another value in the decoding phase.
 # For more on this, read the paper. It is pretty easy to understand.
-#   
+#
+
 
 def _rebase(x1, x2, min_val, max_val):
     x1 = (x1 * (max_val - min_val)) + min_val
     x2 = (x2 * (max_val - min_val)) + min_val
     return x1, x2
 
+
 ## %% [markdown]
 # Hyperparams. This needs no explanation.
-penalty = .90
+penalty = .97
 learning_rate = 0.01
-comment = "refactored no dropout"
+comment = "fixed"
 lbound, ubound = -1, 2
-batch_size = 4
+batch_size = 5
 output_dim = 300
+clip_margin = 1e-3
 
 autoencoder = AutoEncoder(data_shape=data_shape, output_dim=output_dim, verbose=2)
-loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)
+loss_fn = WeightedBinaryCrossEntropy(penalty=penalty, clip_margin=clip_margin)
 opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
 opt_cl = opt.Adam(learning_rate=learning_rate)
 
@@ -461,6 +471,7 @@ x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 
+
 # %% [markdown]
 # Some minor stuff with regards to tensorboard. This code helped debugging my model.
 def construct_log_dir(elements=[]):
@@ -469,11 +480,12 @@ def construct_log_dir(elements=[]):
 
 
 elems = [
-    f"[{lbound:07.7f} & {ubound:07.7f}]",
-    f"[{penalty:05.5f}]",
-    f"[{learning_rate:07.7f}]",
-    f"[{batch_size:02d}]",
-    f"[{output_dim:03d}]",
+    f"bounds[{lbound:07.7f} & {ubound:07.7f}]",
+    f"penalty[{penalty:05.5f}]",
+    f"lr[{learning_rate:07.7f}]",
+    f"clip[{clip_margin:07.7f}]",
+    f"batch[{batch_size:02d}]",
+    f"dim[{output_dim:03d}]",
     f"{comment}" if comment else "NA",
 ]
 
@@ -562,7 +574,7 @@ image_log_callback = CustomCallback(validation_data, penalty=penalty)
 history = autoencoder.fit(
     x_train_mod,
     y_train_mod,
-    epochs=25,
+    epochs=100,
     batch_size=batch_size,
     shuffle=True,
     validation_data=validation_data,

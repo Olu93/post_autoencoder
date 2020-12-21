@@ -283,15 +283,17 @@ x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 
 
 def construct_log_dir(elements=[]):
-    log_dir = f"logs/{datetime.now().strftime('%H%M%S')}/" + " - ".join(elements)
+    log_dir = f"logs/{datetime.now().strftime('%m%d%H%M%S')}/" + " - ".join(elements)
     return log_dir
 
 
 elems = [
-    f"[{lbound:07.7f} & {ubound:07.7f}]",
-    f"[{penalty:05.5f}]",
-    f"[{learning_rate:07.7f}]",
-    f"[{batch_size:02d}]",
+    f"bounds[{lbound:07.7f} & {ubound:07.7f}]",
+    f"penalty[{penalty:05.5f}]",
+    f"lr[{learning_rate:07.7f}]",
+    # f"clip[{clip_margin:07.7f}]",
+    f"batch[{batch_size:02d}]",
+    # f"dim[{output_dim:03d}]",
     f"{comment}" if comment else "NA",
 ]
 
