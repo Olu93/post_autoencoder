@@ -1,1 +1,6 @@
 - Examples for VAE are just far from practise in the subclassing case
+
+penalty = .90
+learning_rate = 0.01
+comment = "use overall sum"
+lbound, ubound = -0, 1

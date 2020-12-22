@@ -135,7 +135,9 @@ def generate_img_of_decodings_expanded(encodings, decodings, thresholds=[.9, .95
         ax.set_xlim(0, encoding_res)
         ax.set_ylim(0, encoding_res)
         ax.set_zlim(0, encoding_res)
-        elem2 = np.argwhere(decodings[0] >= tresh)
+        mask = np.where(decodings[0] >= tresh, 1, np.zeros_like(decodings[0]))
+        masked_elem = mask * decodings[0]
+        elem2 = np.argwhere(masked_elem)
         ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
 
     return fig
@@ -453,8 +455,8 @@ def _rebase(x1, x2, min_val, max_val):
 penalty = .97
 learning_rate = 0.01
 comment = "fixed"
-lbound, ubound = -1, 2
-batch_size = 5
+lbound, ubound = -0.1, 2
+batch_size = 2
 output_dim = 300
 clip_margin = 1e-3
 
@@ -568,7 +570,7 @@ lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
 validation_data = (x_test_mod, y_test_mod)
 image_log_callback = CustomCallback(validation_data, penalty=penalty)
 
-# %% [markdown]
+# %% 
 # Alright let's go!
 
 history = autoencoder.fit(
