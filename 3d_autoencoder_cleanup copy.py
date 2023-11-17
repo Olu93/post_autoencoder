@@ -247,7 +247,7 @@ class EncoderUnit(Layer):
                                   strides=2,
                                   padding='same',
                                   kernel_regularizer=reg.L1L2(.1, .1))
-        self.drop = layers.Dropout(.5)
+        # self.drop = layers.Dropout(.5)
         self.norm = layers.BatchNormalization()
 
     def call(self, inputs, **kwargs):
@@ -267,7 +267,7 @@ class DecoderUnit(Layer):
                                            strides=2,
                                            padding="same",
                                            kernel_regularizer=reg.L1L2(.1, .1))
-        self.drop = layers.Dropout(.5)
+        # self.drop = layers.Dropout(.5)
         self.norm = layers.BatchNormalization()
 
     def call(self, inputs, **kwargs):
@@ -357,9 +357,9 @@ class Encoder(Model):
         self.data_shape = data_shape
         self.output_dim = output_dim
         self.elayers = [
+            EncoderUnit(8),
             EncoderUnit(16),
             EncoderUnit(32),
-            EncoderUnit(48),
             EncoderUnit(64),
         ]
         self.sampler = Sampling(self.output_dim)
@@ -386,9 +386,9 @@ class Decoder(Model):
         self.original_shape = original_shape
         self.dlayers = [
             DecoderUnit(64),
-            DecoderUnit(48),
             DecoderUnit(32),
             DecoderUnit(16),
+            DecoderUnit(8),
         ]
         self.final_decoding = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")
 
