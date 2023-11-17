@@ -452,13 +452,13 @@ def _rebase(x1, x2, min_val, max_val):
 
 ## %% [markdown]
 # Hyperparams. This needs no explanation.
-penalty = .97
+penalty = .90
 learning_rate = 0.01
 comment = "fixed"
-lbound, ubound = -0.1, 2
+lbound, ubound = -0.01, 2
 batch_size = 2
 output_dim = 300
-clip_margin = 1e-3
+clip_margin = 1e-7
 
 autoencoder = AutoEncoder(data_shape=data_shape, output_dim=output_dim, verbose=2)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty, clip_margin=clip_margin)
@@ -540,7 +540,7 @@ class CustomCallback(tf.keras.callbacks.Callback):
         # precision = 3
         # floored_max = my_floor(max_pred, precision)
         # thresh = sorted(floored_max + np.linspace(0, 1, 11) / 10**precision)
-        thresh = np.linspace(0.5, 1, 11)
+        thresh = np.linspace(0.85, 1, 11)
         fig = generate_img_of_decodings_expanded(val_true, val_predict, thresh)
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
