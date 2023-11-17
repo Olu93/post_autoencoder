@@ -71,7 +71,7 @@ import pathlib
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 gpus = tf.config.experimental.list_physical_devices('GPU')
-# tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(True)
 
 if gpus:
     try:
@@ -229,13 +229,14 @@ f"Training: {x_train.shape} | Test: {x_test.shape}"
 # (But this is for rather advanced Python coders as you might not get everything immediately. The code is written in a framework I don't really know called Lasagne. It is based on Theano. So there was little copy pasting here possible.)
 #
 
-# %% [markdown]
+# %%
+## %% [markdown]
 # These are just abstractions of the main processing units. The setup is very common.
 # A convolution, then a dropout and afterwards normalisation. The order or even whether to use this setup is hotly debated.
 # Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/](this)
 # I might drop the dropout layer in the future as it seems to have fallen from grace.
 
-WITH_DROP = True
+WITH_DROP = False
 
 
 class EncoderUnit(Layer):
@@ -357,12 +358,13 @@ class Encoder(Model):
         self.data_shape = data_shape
         self.output_dim = output_dim
         self.elayers = [
+            EncoderUnit(8),
             EncoderUnit(16),
             EncoderUnit(32),
-            EncoderUnit(48),
             EncoderUnit(64),
         ]
         self.sampler = Sampling(self.output_dim)
+
 
     def call(self, inputs, **kwargs):
         x = inputs
@@ -373,6 +375,12 @@ class Encoder(Model):
         z = self.sampler(x)
         return z, x
 
+    def summary(self, line_length=None, positions=None, print_fn=None):
+        x = layers.Input(shape=(32, 32, 32, 1))
+        print(x)
+        encoder = Model(inputs=[x], outputs=self.call(x))
+        encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+
 
 ## %% [markdown]
 # The decoder, on the other hand, builds two of his layers slightly after initialization. With this I can slightly defer the creation of these layers.
@@ -381,22 +389,24 @@ class Encoder(Model):
 
 
 class Decoder(Model):
-    def __init__(self, original_shape, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
+    def __init__(self, original_shape, input_dim, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
         super(Decoder, self).__init__(name=name, **kwargs)
         self.original_shape = original_shape
+        self.input_dim = input_dim
         self.dlayers = [
             DecoderUnit(64),
-            DecoderUnit(48),
             DecoderUnit(32),
             DecoderUnit(16),
+            DecoderUnit(8),
         ]
         self.final_decoding = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")
 
     def build(self, input_shape):
-        in_shape = np.prod(input_shape[1][1:])
-        bridging_shape = input_shape[1][1:]
-        self.receiver = layers.Dense(in_shape, kernel_regularizer=reg.L1L2(.1, .1))
-        self.unflattener = layers.Reshape(bridging_shape)
+        self.in_shape = np.prod(input_shape[1][1:])
+        print(input_shape)
+        self.bridging_shape = input_shape[1][1:]
+        self.receiver = layers.Dense(self.in_shape, kernel_regularizer=reg.L1L2(.1, .1))
+        self.unflattener = layers.Reshape(self.bridging_shape)
 
     def call(self, inputs, **kwargs):
         embedding, _ = inputs
@@ -407,6 +417,10 @@ class Decoder(Model):
         decoder_outputs = self.final_decoding(x)
         return decoder_outputs
 
+    def summary(self, line_length=None, positions=None, print_fn=None):
+        x = layers.Input(shape=(self.input_dim))
+        decoder = Model(inputs=[x], outputs=self.call([x, None]))
+        decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
 
 ## %% [markdown]
 # Another point is, that both are models on their own, instead of specialized layers.
@@ -426,7 +440,7 @@ class AutoEncoder(Model):
         self.in_shape = (None, ) + self.original_shape
         self.output_dim = output_dim
         self.encoder = Encoder(self.original_shape, self.output_dim)
-        self.decoder = Decoder(self.original_shape)
+        self.decoder = Decoder(self.original_shape, self.output_dim)
 
     def call(self, inputs, **kwargs):
         x = layers.InputLayer(self.original_shape)(inputs)
@@ -437,9 +451,15 @@ class AutoEncoder(Model):
 
     def summary(self, line_length=None, positions=None, print_fn=None):
         self.build((None, ) + self.original_shape)
+        # x = layers.Input(shape=(32, 32, 32, 1))
+        # encoder = Model(inputs=[x], outputs=self.encoder(x))
         self.encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
         self.decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
         return super().summary(line_length=line_length, positions=positions, print_fn=print_fn)
+
+    # def model(self):
+    #     x = layers.Input(shape=(32, 32, 32, 1))
+    #     return Model(inputs=[x], outputs=self.call(x))
 
 
 ## %% [markdown]
