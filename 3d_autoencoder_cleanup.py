@@ -325,16 +325,39 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         self.clip_margin = clip_margin
 
     def call(self, y_true, y_pred):
-        return WeightedBinaryCrossEntropy.wbce(y_true, y_pred, self.penalty, self.clip_margin)[0]
+        return WeightedBinaryCrossEntropy.wbce_paper(y_true, y_pred, self.penalty, self.clip_margin)[0]
 
     @staticmethod
-    def wbce(y_true, y_pred, penalty, clip_margin=1e-3):
+    def wbce_old(y_true, y_pred, penalty, clip_margin=1e-3):
         penalty *= 100
         clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, clip_margin, 1.0 - clip_margin)
         binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) *
                                  (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
         loss = tf.reduce_sum(binary_cross_entropy)
         return loss, binary_cross_entropy
+    
+    @staticmethod
+    def wbce_new(y_true, y_pred, penalty, clip_margin=1e-3):
+        positives = penalty * y_true * tf.math.log(y_pred)
+        negatives = (1.0 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - y_pred)
+        binary_cross_entropy = - positives - negatives 
+        loss = tf.reduce_sum(binary_cross_entropy)
+        return loss, binary_cross_entropy
+
+    @staticmethod
+    def wbce_paper(y_true, y_pred, penalty, clip_margin=1e-3):
+        y_true_mod = WeightedBinaryCrossEntropy.rebase(y_true, -1,2)
+        y_pred_mod = WeightedBinaryCrossEntropy.rebase(y_pred, 0.1,1)
+        positives = penalty * y_true_mod * tf.math.log(y_pred_mod)
+        negatives = (1.0 - penalty) * (1.0 - y_true_mod) * tf.math.log(1.0 - y_pred_mod)
+        binary_cross_entropy = - positives - negatives 
+        loss = tf.reduce_sum(binary_cross_entropy)
+        return loss, binary_cross_entropy
+
+    @staticmethod
+    def rebase(x1, min_val, max_val):
+        x1 = (x1 * (max_val - min_val)) + min_val
+        return x1
 
     @staticmethod
     def clip_pred(y_pred, min_val, max_val):
@@ -434,13 +457,13 @@ class Decoder(Model):
 ## %% [markdown]
 # This code brings all together. With all the modularisation from beforehand it should be very straightforward.
 class AutoEncoder(Model):
-    def __init__(self, data_shape, output_dim=300, verbose=False, name="autoencoder", **kwargs):
+    def __init__(self, data_shape, hidden_dim=300, verbose=False, name="autoencoder", **kwargs):
         super(AutoEncoder, self).__init__(name=name, **kwargs)
         self.original_shape = data_shape
         self.in_shape = (None, ) + self.original_shape
-        self.output_dim = output_dim
-        self.encoder = Encoder(self.original_shape, self.output_dim)
-        self.decoder = Decoder(self.original_shape, self.output_dim)
+        self.hidden_dim = hidden_dim
+        self.encoder = Encoder(self.original_shape, self.hidden_dim)
+        self.decoder = Decoder(self.original_shape, self.hidden_dim)
 
     def call(self, inputs, **kwargs):
         x = layers.InputLayer(self.original_shape)(inputs)
@@ -484,10 +507,10 @@ learning_rate = 0.01
 comment = "fixed"
 lbound, ubound = -0.01, 2
 batch_size = 2
-output_dim = 300
+hidden_dim = 300
 clip_margin = 1e-7
 
-autoencoder = AutoEncoder(data_shape=data_shape, output_dim=output_dim, verbose=2)
+autoencoder = AutoEncoder(data_shape=data_shape, hidden_dim=hidden_dim, verbose=2)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty, clip_margin=clip_margin)
 opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
 opt_cl = opt.Adam(learning_rate=learning_rate)
@@ -497,8 +520,8 @@ autoencoder.summary()
 # %%
 x_train_mod, y_train_mod = _rebase(x_train, x_train, 0, 1)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
-x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
-x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
+# x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
+# x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 
 
 # %% [markdown]
@@ -514,7 +537,7 @@ elems = [
     f"lr[{learning_rate:07.7f}]",
     f"clip[{clip_margin:07.7f}]",
     f"batch[{batch_size:02d}]",
-    f"dim[{output_dim:03d}]",
+    f"dim[{hidden_dim:03d}]",
     f"{comment}" if comment else "NA",
 ]
 
