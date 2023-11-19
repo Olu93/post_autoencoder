@@ -1,13 +1,59 @@
-# https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling/tree/master/Generative
-# https://github.com/AnTao97/PointCloudDatasets/blob/master/dataset.py
+# %% [markdown]
+## 3D Convolutional autoencoder for voxel data!
+#
+# This code shows the example of a 3D convolution autoencoder applied on ModelNet40 and PSB datasets.
+# It is the natural extension of [./2d_autoencoder.ipynb](Part 1) of this series.
+#
+# These links complement the ones introduced in Part 1:
+# - https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling/tree/master/Generative
+# - https://github.com/AnTao97/PointCloudDatasets/blob/master/dataset.py
+
+# %% [markdown]
+# ## Background
+
+# This part of the series needs a bit more explaination. So far, there haven't been many attempts to use CNN's for 3D objects. Why? Probably because of the representation that would be required for a vanilla CNN to work without many changes.
+
+# ### Pixels and Voxels
+
+# The logical 3D extenstion of a 2D image would be a 3D grid, because an image is essentially a 2D grid with each cell representing a pixel. In the same manner 3D cells in a 3D grid are called voxels. In both cases, pixels and voxels are somewhat abstract containers that hold values. We typically think pixels strictly contain only color values but they can hold much more information. Opacity is an intuitive example, but we could even save meta-data in there. That was just for the intuition. Voxels are pretty common within neuroscience and obviously game technology.
+
+# ### Voxels and Convolutions
+
+# After this description it might be trivial, but we can extend the intuition about convolutions easily onto the next dimension. While we convolve for with a restricted set of 2D filters over images, we do the same with 3D objects. This time, we only imagine cubes instead of squares. In fact, many of you who have already used CNN's know, that this is already common practice, as we treat colors often as that third dimension. This flexibility ties back to the idea that these cells are merely containers and the dimensions can represent anything.
+
+# ### So far so good... But what's the issue with those?
+
+# Well, neither am I well acquainted with Game-Technology nor do I have a background in Computer Graphics. However, from what I understand, there are about X reasons:
+
+# - First, voxel data is exponentially larger than pixel data, given the added dimension. Meaning, that you now need to deal with more data and all of it. If you just care about simple singular 3D models, most of the volume might be empty.
+
+# - Second, depending on your resolution (which directly affects the data volume), things can become quite minecrafty.
+
+# - Third, there are alternatives: Point clouds and polygons. Both are vector-based and the ladder even maintains structure.
+
+# ### Why still use voxels then?
+
+# They obviously also have advantages. They maintain structure, they are easy to process in computer graphics, they are great for procedural generation. Some of the algorythms for images like JPEG are easy to extend.
+
+# ### Links
+
+# For more about these matters checkout following materials:
+
+# - [https://medium.com/@EightyLevel/how-voxels-became-the-next-big-thing-4eb9665cd13a](An explanation for voxels imminent comeback in Gaming. May be a bit difficult to follow.)
+# - [https://www.quora.com/What-are-the-pros-and-cons-of-using-voxels-instead-of-polygons](Best explanation that I found on this topic. Also videogame centric.)
+
 # %%
 from datetime import datetime
+from enum import auto
+import functools
 import io
 from pyntcloud.structures.voxelgrid import VoxelGrid
 import tensorflow as tf
 import pickle
 import pyvista as pv
 from pyntcloud import PyntCloud
+from tensorflow.python.keras.backend import dtype
+from tensorflow.python.keras.engine.base_layer import Layer
 from tqdm import tqdm
 import pandas as pd
 import glob
@@ -23,8 +69,11 @@ from tensorflow.keras.datasets import mnist
 from sklearn.model_selection import train_test_split
 import pathlib
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-
+import matplotlib
 gpus = tf.config.experimental.list_physical_devices('GPU')
+# matplotlib.use('TKAgg')
+# tf.config.run_functions_eagerly(True)
+
 if gpus:
     try:
         for gpu in gpus:
@@ -32,8 +81,15 @@ if gpus:
     except RuntimeError as e:
         print(e)
 
+# %% [markdown]
+# I've defined a couple of functions that will be used below.
+# Most of them only deal with plotting
 
-# %%
+
+def compose(f, g):
+    return lambda arg: f(g(arg))
+
+
 def retrieve_voxel_data(cloud, n=8):
     voxelgrid_id = cloud.add_structure("voxelgrid", n_x=n, n_y=n, n_z=n)
     voxelgrid = cloud.structures[voxelgrid_id]
@@ -65,44 +121,47 @@ def generate_img_of_decodings(encodings, decodings, n=5, thresh=.8):
 
 
 def generate_img_of_decodings_expanded(encodings, decodings, thresholds=[.9, .95, .99, .999, 1]):
+    
     rows = 1
     fig = plt.figure(figsize=(25, 5))
     n = len(thresholds) + 1
-
+    encoding_res = len(encodings[0])
     ax = fig.add_subplot(rows, n, 1, projection='3d')
-    elem1 = np.argwhere(encodings[0])
+    elem1 = encodings[0].squeeze()
     ax.set_title("Original")
-    ax.scatter(elem1[:, 0], elem1[:, 1], elem1[:, 2], cmap="Greys_r")
+    ax.voxels(elem1, cmap="Greys_r")
     for i, tresh in enumerate(thresholds):
         cnt = i + 1
         ax = fig.add_subplot(rows, n, cnt + 1, projection='3d')
-        ax.set_title(f"> {tresh:05}")
-        elem2 = np.argwhere(decodings[0] >= tresh)
-        ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
+        ax.set_title(f"> {tresh:05.5f}")
+        ax.set_xlim(0, encoding_res)
+        ax.set_ylim(0, encoding_res)
+        ax.set_zlim(0, encoding_res)
+        # mask = np.where(decodings[0] >= tresh, 1, np.zeros_like(decodings[0]))
+        # masked_elem = mask * decodings[0]
+        elem2 = (decodings[0] >= tresh).squeeze()
+        ax.voxels(elem2, cmap="Greys_r")
 
     return fig
-
-
-# def plot_pointcound(pynt_cloud_object):
-#     example_cloud = pynt_cloud_object
-#     example_voxelgrid_id = example_cloud.add_structure("voxelgrid", n_x=32, n_y=32, n_z=32)
-#     example_voxelgrid = example_cloud.structures[example_voxelgrid_id]
-#     return example_voxelgrid.plot(d=3, mode="binary", cmap="hsv", width=400, height=400)
 
 
 def plot_pointcound(pynt_cloud_object, n=32):
     vol, example_voxelgrid = retrieve_voxel_data(pynt_cloud_object, n)
     return example_voxelgrid.plot(d=3, mode="binary", cmap="hsv", width=400, height=400)
 
+def plot_pointcound_matplotlib(pynt_cloud_object, n=32):    
+    vol, example_voxelgrid = retrieve_voxel_data(pynt_cloud_object, n)
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')  
+    ax.voxels(vol)  
+    return plt.show()
 
-# test_sample = np.array(random.sample(list(x_test_mod), 100))
-# val_true = test_sample
-# val_predict = np.asarray(autoencoder.predict(test_sample))
-# fig = generate_img_of_decodings_expanded(val_true, val_predict)
 
-# plot_pointcound(PyntCloud.from_file("data/airplane_0001.ply"))
+# %% [markdown]
+# ## Data preprocessing
+# Because I only have polygon meshes of the data, I decided to opt for a library to convert those to voxel representations.
+# The library is called [https://github.com/daavoo/pyntcloud](pyntcloud).
 
-# %%
 path_to_dataset = pathlib.Path("data/dataset.pkl")
 point_cloud_dataset_collected = None
 num_meshes = None
@@ -118,133 +177,316 @@ if not path_to_dataset.exists():
     pickle.dump(file=io.open(path_to_dataset, "wb"), obj=point_cloud_dataset_collected)
     print(f"Loaded point clouds for {num_meshes} meshes")
 
-# %%
-plot_pointcound(point_cloud_dataset_collected[4])
+# %% [markdown]
+# Let's see what we got. I used 32 as a default cell count in all dimensions.
+# 32 is just an arbitrary number I chose. Obviously, the more the more fine grained the images but the more data to process.
+# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 32)
 
-# %%
+# %% [markdown]
+# Let's check out what we retrieve with a lower resolution
+# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 8)
+# %% [markdown]
+# Now with a higher one
+# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 64)
+
+# %% [markdown]
+# Here, I convert all voxels to a numpy matrix with dimensions: [N, 32, 32, 32, 1]
+#
+# Intuitively you can understand N as number of voxels and the 1 is "like" the color channel for the 2D image case.
+#
 path_to_voxel_matrix = pathlib.Path("data/dataset_voxels.npz")
 data = None
 if path_to_voxel_matrix.exists():
     data = np.load(path_to_voxel_matrix)["data"]
 
 if not path_to_voxel_matrix.exists():
-    voxel_data_generator = (retrieve_voxel_data(cloud, 32) for cloud in tqdm(point_cloud_dataset_collected, total=num_meshes))
+    voxel_data_generator = (retrieve_voxel_data(cloud, 32)
+                            for cloud in tqdm(point_cloud_dataset_collected, total=num_meshes))
     voxel_data_collected = list(voxel_data_generator)
     voxel_data = np.array([item[0] for item in voxel_data_collected])
     data = voxel_data.reshape(voxel_data.shape + (1, ))
     np.savez_compressed(path_to_voxel_matrix, data=data)
 data_shape = data.shape[1:]
 f"Loaded voxel data for {num_meshes} meshes"
-# %%
-# voxel_data_collected[2][1].plot(d=3, mode="density", width=400, height=400)
-# %%
+
+# %% [markdown]
+# By know, this should be fairly clear.
+#
 cut_point = .1
 x_train, x_test = train_test_split(data.astype(np.float), shuffle=True, test_size=.1)
 f"Training: {x_train.shape} | Test: {x_test.shape}"
 
-# %%
+# %% [markdown]
+# ## The model building blocks
+# This is where the model starts. To step up the game, I used subclassing to modularized the model and make it seem cleaner.
+#
+# I was inspired by following resources
+# - https://stackoverflow.com/a/58526969/4162265
+# - https://www.tensorflow.org/guide/keras/custom_layers_and_models#putting_it_all_together_an_end-to-end_example
+#
+# I took most of the conceptual ideas from the paper that inspired this code:
+# [http://arxiv.org/abs/1608.04236](Generative and Discriminative Voxel Modeling with Convolutional Neural Networks) by Brock et. al.
+# Luckily he provides a quick run down in a [https://www.youtube.com/watch?v=LtpU1yBStlU](video)
+# I also took inspiration from his code on [https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling](Github) in order to understand and debug.
+# (But this is for rather advanced Python coders as you might not get everything immediately. The code is written in a framework I don't really know called Lasagne. It is based on Theano. So there was little copy pasting here possible.)
+#
+
+# %% [markdown]
+# These are just abstractions of the main processing units. The setup is very common.
+# A convolution, then a dropout and afterwards normalisation. The order or even whether to use this setup is hotly debated.
+# Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/](this)
+# I might drop the dropout layer in the future as it seems to have fallen from grace.
+
+WITH_DROP = False
 
 
-def EncoderUnit(e, num_filters):
-    e = layers.Conv3D(num_filters, 3, activation='elu', strides=2, padding='same', kernel_regularizer=reg.L1L2(.1, .1))(e)
-    e = layers.Dropout(.5)(e)
-    e = layers.BatchNormalization()(e)
-    return e
+class EncoderUnit(Layer):
+    def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
+        super(EncoderUnit, self).__init__(name=name, **kwargs)
+        self.conv = layers.Conv3D(num_filters,
+                                  3,
+                                  activation='elu',
+                                  strides=2,
+                                  padding='same',
+                                  kernel_regularizer=reg.L1L2(.1, .1))
+        self.drop = layers.Dropout(.5)
+        self.norm = layers.BatchNormalization()
+
+    def call(self, inputs, **kwargs):
+        x = self.conv(inputs)
+        if WITH_DROP:
+            x = self.drop(x)
+        x = self.norm(x)
+        return x
 
 
-def DecoderUnit(d, num_filters):
-    d = layers.Conv3DTranspose(num_filters, 3, activation="elu", strides=2, padding="same", kernel_regularizer=reg.L1L2(.1, .1))(d)
-    d = layers.Dropout(.5)(d)
-    d = layers.BatchNormalization()(d)
-    return d
+class DecoderUnit(Layer):
+    def __init__(self, num_filters, name="encoder_unit", **kwargs) -> None:
+        super(DecoderUnit, self).__init__(name=name, **kwargs)
+        self.conv = layers.Conv3DTranspose(num_filters,
+                                           3,
+                                           activation="elu",
+                                           strides=2,
+                                           padding="same",
+                                           kernel_regularizer=reg.L1L2(.1, .1))
+        self.drop = layers.Dropout(.5)
+        self.norm = layers.BatchNormalization()
+
+    def call(self, inputs, **kwargs):
+        x = self.conv(inputs)
+        if WITH_DROP:
+            x = self.drop(x)
+        x = self.norm(x)
+        return x
 
 
-def Encoder(data_shape, output_dim=8):
-    encoder_inputs = tf.keras.Input(shape=data_shape)
-    x = encoder_inputs
-    x = EncoderUnit(x, 16)
-    x = EncoderUnit(x, 32)
-    x = EncoderUnit(x, 48)
-    x = EncoderUnit(x, 64)
-    unflattened_shape = list(x.shape[1:])
-    x = layers.Flatten()(x)
-    flattened_shape = list(x.shape[1:])[0]
-    # e = layers.Dense(8, activation="elu")(e)
-    z = layers.Dense(output_dim, kernel_regularizer=reg.L1L2(.1, .1))(x)
-    # z = layers.Dropout(.5)(z)
-    print("8==============D")
-    print(output_dim)
-    return Model(encoder_inputs, z), [output_dim, flattened_shape, unflattened_shape]
+class Sampling(Layer):
+    """Uses (z_mean, z_log_var) to sample z, the vector encoding a digit."""
+    def __init__(self, output_dim, name="Sampler", **kwargs):
+        super(Sampling, self).__init__(name=name, **kwargs)
+        self.output_dim = output_dim
+        self.flatten = layers.Flatten()
+        self.sample = layers.Dense(self.output_dim, kernel_regularizer=reg.L1L2(.1, .1))
+
+    def call(self, inputs):
+        x = self.flatten(inputs)
+        z = self.sample(x)
+        return z
 
 
-def Decoder(bridging_shapes):
-    print(bridging_shapes)
-    z = layers.Input(shape=(bridging_shapes[0], ))  # adapt this if using `channels_first` image data format
-
-    d = layers.Dense(bridging_shapes[1], kernel_regularizer=reg.L1L2(.1, .1))(z)
-    # d = layers.Dropout(.5)(d)
-    d = layers.Reshape(bridging_shapes[2])(d)
-    d = DecoderUnit(d, 64)
-    d = DecoderUnit(d, 48)
-    d = DecoderUnit(d, 32)
-    d = DecoderUnit(d, 16)
-    # d = layers.Conv3DTranspose(1, 3, activation="elu", strides=2, padding="same")(d)
-    decoder_outputs = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")(d)
-    # decoder_outputs = tf.pow(decoder_outputs, 3)
-
-    return Model(z, decoder_outputs)
-
-
-def output_manipulation(x):
-    return tf.where(tf.less_equal(x, .5), .0, x)
-
-
-def generate_loss_function(penalty=.5):
-    assert penalty >= 0 and penalty <= 1, "Choose value between 0 and 1"
-    penalty = tf.constant(penalty, dtype=tf.float32)
-
-    def loss_function(y, y_pred):
-        clipped_y_pred = y_pred
-        clipped_y_pred = tf.keras.backend.clip(y_pred, 0.1, 0.99)
-        binary_cross_entropy = -y * penalty * tf.math.log(clipped_y_pred) + 2 * (1 - y) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
-        loss = tf.reduce_mean(binary_cross_entropy)
-        return loss
-
-    return loss_function
+# %% [markdown]
+# I will also use a custom loss function. The reason here is, that all that we want is predict whether the cell in question has its voxel filled or not.
+# Remember, we only have one color &mdash; grey. And we don't even want anything between this color spectrum. What we want is either black or white. Absolute certainty for any of those.
+#
+# This makes our problem a high dimensional binary classification task. Hence, you would use binary-cross-entropy in that case.
+# However, there's a catch: Most of our data is probably pretty empty. It would be easy for the model to just predict everything is empty.
+# That's called "getting stuck in a local optimum". Pretty unfortunate, if that optimum is a very bad one.
+#
+# The solution is weighting correctly predicted cells that are empty less than hitting a filled cell.
+# Additionally, I decided to not take the mean of the sum, because this does not produce a large flow of loss back into the model. Or at least that was my intuition.
+# The general design for the code was taken from [https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x](here)
 
 
 class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
-    # https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x
     """
     Args:
-      pos_weight: Scalar to affect the positive labels of the loss function.
-      weight: Scalar to affect the entirety of the loss function.
-      from_logits: Whether to compute loss from logits or the probability.
-      reduction: Type of tf.keras.losses.Reduction to apply to loss.
-      name: Name of the loss function.
+    pos_weight: Scalar to affect the positive labels of the loss function.
+    weight: Scalar to affect the entirety of the loss function.
+    from_logits: Whether to compute loss from logits or the probability.
+    reduction: Type of tf.keras.losses.Reduction to apply to loss.
+    name: Name of the loss function.
     """
-    def __init__(self, penalty, reduction=tf.keras.losses.Reduction.AUTO, name='weighted_binary_crossentropy'):
+    def __init__(self,
+                 penalty,
+                 clip_margin=1e-3,
+                 reduction=tf.keras.losses.Reduction.AUTO,
+                 name='weighted_binary_crossentropy'):
         super().__init__(reduction=reduction, name=name)
         self.penalty = penalty
+        self.clip_margin = clip_margin
 
     def call(self, y_true, y_pred):
-        return WeightedBinaryCrossEntropy.wbce(y_true, y_pred, self.penalty)[0]
+        return WeightedBinaryCrossEntropy.wbce_paper(y_true, y_pred, self.penalty, self.clip_margin)[0]
 
     @staticmethod
-    def wbce(y_true, y_pred, penalty):
-        # clipped_y_pred = tf.keras.backend.clip(y_pred, 0.01, 0.99)
-        # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + 2 * (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
-        # binary_cross_entropy = -y_true * penalty * tf.math.log(clipped_y_pred) + (1 - y_true) * (1 - penalty) * tf.math.log(1 - clipped_y_pred)
+    def wbce_old(y_true, y_pred, penalty, clip_margin=1e-3):
         penalty *= 100
-        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, 1e-3, 1.0 - 1e-3)
-        binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
+        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, clip_margin, 1.0 - clip_margin)
+        binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) *
+                                 (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
         loss = tf.reduce_sum(binary_cross_entropy)
         return loss, binary_cross_entropy
+    
+    @staticmethod
+    def wbce_new(y_true, y_pred, penalty, clip_margin=1e-3):
+        positives = penalty * y_true * tf.math.log(y_pred)
+        negatives = (1.0 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - y_pred)
+        binary_cross_entropy = - positives - negatives 
+        loss = tf.reduce_sum(binary_cross_entropy)
+        return loss, binary_cross_entropy
+
+    @staticmethod
+    def wbce_paper(y_true, y_pred, penalty, clip_margin=1e-3):
+        y_true_mod = WeightedBinaryCrossEntropy.rebase(y_true, 0,1)
+        y_pred_mod = WeightedBinaryCrossEntropy.rebase(y_pred, 0.00001,0.99999)
+        positives = penalty * y_true_mod * tf.math.log(y_pred_mod)
+        negatives = (1.0 - penalty) * (1.0 - y_true_mod) * tf.math.log(1.0 - y_pred_mod)
+        binary_cross_entropy = - positives - negatives 
+        loss = tf.reduce_sum(binary_cross_entropy)/tf.cast(len(y_true_mod), tf.float32)
+        return loss, binary_cross_entropy
+
+    @staticmethod
+    def rebase(x1, min_val, max_val):
+        x1 = (x1 * (max_val - min_val)) + min_val
+        return x1
 
     @staticmethod
     def clip_pred(y_pred, min_val, max_val):
         clipped_y_pred = tf.keras.backend.clip(y_pred, min_val, max_val)
         return clipped_y_pred
+
+
+# %% [markdown]
+# ## Model definitions for encoding and decoding
+# The next part introduces the models. I also created a dedicated sampling layer, because I want to expand this approach to variational autoencoders in the future.
+# I don't think they are very comlicated to understand, given that I have abtracted the processing units away.
+
+# %% [markdown]
+# What's important in the encoder is that I return the last layer which is flattend AND the previous layer which is unflattend.
+# With this approach, I can bridge shapes onto the decoder.
+
+
+class Encoder(Model):
+    def __init__(self, data_shape, output_dim=8, EncoderUnit=EncoderUnit, name="encoder", **kwargs):
+        super(Encoder, self).__init__(name=name, **kwargs)
+        self.data_shape = data_shape
+        self.output_dim = output_dim
+        self.elayers = [
+            EncoderUnit(8),
+            EncoderUnit(16),
+            EncoderUnit(32),
+            EncoderUnit(64),
+        ]
+        self.sampler = Sampling(self.output_dim)
+
+
+    def call(self, inputs, **kwargs):
+        x = inputs
+        for layer in self.elayers:
+            x = layer(x)
+
+        z = self.sampler(x)
+        return z, x
+
+    def summary(self, line_length=None, positions=None, print_fn=None):
+        x = layers.Input(shape=(32, 32, 32, 1))
+        print(x)
+        encoder = Model(inputs=[x], outputs=self.call(x))
+        encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+
+
+# %% [markdown]
+# The decoder, on the other hand, builds two of his layers slightly after initialization. With this I can slightly defer the creation of these layers.
+# Why not in the call method then? I tried that, but it seems that TF or Keras does not recognize layers in the call method as trainable layers.
+# Hence, you will see a difference in number of training params if you do so nonetheless.
+
+class Decoder(Model):
+    def __init__(self, original_shape, input_dim, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
+        super(Decoder, self).__init__(name=name, **kwargs)
+        self.original_shape = original_shape
+        self.input_dim = input_dim
+        self.dlayers = [
+            DecoderUnit(64),
+            DecoderUnit(32),
+            DecoderUnit(16),
+            DecoderUnit(8),
+        ]
+        self.final_decoding = layers.Conv3DTranspose(1, 3, activation='sigmoid', strides=1, padding="same")
+
+    def build(self, input_shape):
+        self.in_shape = np.prod(input_shape[1][1:])
+        print(input_shape)
+        self.bridging_shape = input_shape[1][1:]
+        self.receiver = layers.Dense(self.in_shape, kernel_regularizer=reg.L1L2(.1, .1))
+        self.unflattener = layers.Reshape(self.bridging_shape)
+
+    def call(self, inputs, **kwargs):
+        embedding, _ = inputs
+        x = self.receiver(embedding)
+        x = self.unflattener(x)
+        for layer in self.dlayers:
+            x = layer(x)
+        decoder_outputs = self.final_decoding(x)
+        return decoder_outputs
+
+    def summary(self, line_length=None, positions=None, print_fn=None):
+        x = layers.Input(shape=(self.input_dim))
+        decoder = Model(inputs=[x], outputs=self.call([x, None]))
+        decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+
+# %% [markdown]
+# Another point is, that both are models on their own, instead of specialized layers.
+# There is almost no difference, other than that making a summary of customized layers is quite complicated.
+# Most of the model summary will become hidden from you and replace by output shape "multiple".
+# However, if encoder and decoder are models themselves, that issue becomes a matter of overwriting the default summary function.
+#
+# If you don't get what I mean just switch Encoder(Model) to Encoder(Layer) and you will notice.
+
+
+# %% [markdown]
+# This code brings all together. With all the modularisation from beforehand it should be very straightforward.
+class AutoEncoder(Model):
+    def __init__(self, data_shape, hidden_dim=300, verbose=False, name="autoencoder", **kwargs):
+        super(AutoEncoder, self).__init__(name=name, **kwargs)
+        self.original_shape = data_shape
+        self.in_shape = (None, ) + self.original_shape
+        self.hidden_dim = hidden_dim
+        self.encoder = Encoder(self.original_shape, self.hidden_dim)
+        self.decoder = Decoder(self.original_shape, self.hidden_dim)
+
+    def call(self, inputs, **kwargs):
+        x = layers.InputLayer(self.original_shape)(inputs)
+        z, x = self.encoder(x)
+        z = layers.InputLayer(self.original_shape)(z)
+        decodings = self.decoder([z, x])
+        return decodings
+
+    def summary(self, line_length=None, positions=None, print_fn=None):
+        self.build((None, ) + self.original_shape)
+        # x = layers.Input(shape=(32, 32, 32, 1))
+        # encoder = Model(inputs=[x], outputs=self.encoder(x))
+        self.encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+        self.decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
+        return super().summary(line_length=line_length, positions=positions, print_fn=print_fn)
+
+
+# %% [markdown]
+# I create a function that rescales the values in the data to a range that I see fit.
+# The reason is that Brock et al. found out that that a modification boosts the models performance significantly.
+# If you use tensorboard, you can view the output distributions of the predictions.
+# They will shows you how the model either predicts one or another value in the decoding phase.
+# For more on this, read the paper. It is pretty easy to understand.
+#
 
 
 def _rebase(x1, x2, min_val, max_val):
@@ -253,47 +495,43 @@ def _rebase(x1, x2, min_val, max_val):
     return x1, x2
 
 
-x = layers.Input(shape=data_shape)
-# x = (x * tf.constant(6.0)) - tf.constant(1.0)
-encoder, bridging_shapes = Encoder(data_shape, 300)
-encoder.summary()
-decoder = Decoder(bridging_shapes)
-decoder.summary()
-
-autoencoder = Model(x, decoder(encoder(x)))
-autoencoder.summary()
-# %%
+## %% [markdown]
+# Hyperparams. This needs no explanation.
 penalty = .97
 learning_rate = 0.01
-comment = "serious run"
-lbound, ubound = -1, 2
-batch_size = 5
+comment = "fixed"
+lbound, ubound = -0.01, 2
+batch_size = 10
+hidden_dim = 300
+clip_margin = 1e-7
 
-loss_fn = generate_loss_function(penalty)
-loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)
-opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
+autoencoder = AutoEncoder(data_shape=data_shape, hidden_dim=hidden_dim, verbose=2)
+loss_fn = WeightedBinaryCrossEntropy(penalty=penalty, clip_margin=clip_margin)
+# opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
 opt_cl = opt.Adam(learning_rate=learning_rate)
+
 autoencoder.compile(optimizer=opt_cl, loss=loss_fn)
+autoencoder.summary()
+# %%
 x_train_mod, y_train_mod = _rebase(x_train, x_train, 0, 1)
 x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
-x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
-x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
-# x_train_mod, _ = _rebase(x_train, x_test, lbound, ubound)
-# y_train_mod, _ = _rebase(x_train, x_test, 0, 1)
+# x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
+# x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
 
 
+# %% [markdown]
+# Some minor stuff with regards to tensorboard. This code helped debugging my model.
 def construct_log_dir(elements=[]):
-    log_dir = f"logs/{datetime.now().strftime('%m%d%H%M%S')}/" + " - ".join(elements)
+    log_dir = f"logs/{datetime.now().strftime('%m%d%H%M%S')}/" + "-".join(elements)
     return log_dir
 
 
 elems = [
-    f"bounds[{lbound:07.7f} & {ubound:07.7f}]",
     f"penalty[{penalty:05.5f}]",
     f"lr[{learning_rate:07.7f}]",
-    # f"clip[{clip_margin:07.7f}]",
+    f"clip[{clip_margin:07.7f}]",
     f"batch[{batch_size:02d}]",
-    # f"dim[{output_dim:03d}]",
+    f"dim[{hidden_dim:03d}]",
     f"{comment}" if comment else "NA",
 ]
 
@@ -334,20 +572,15 @@ class CustomCallback(tf.keras.callbacks.Callback):
         test_sample = np.array(random.sample(list(self.x_test), 100))
         val_true = test_sample
         val_predict = np.asarray(self.model.predict(test_sample))
-        loss, bce = WeightedBinaryCrossEntropy.wbce(val_true, val_predict, self.penalty)
+        loss, bce = WeightedBinaryCrossEntropy.wbce_paper(val_true, val_predict, self.penalty)
         min_pred = np.min(val_predict)
         max_pred = np.max(val_predict)
         mean_pred = np.mean(val_predict)
         median_pred = np.median(val_predict)
         minmax_ratio = min_pred / max_pred
         print(f"Min {min_pred:.3f} - Max {max_pred:.3f} - Mean {mean_pred:.3f} - Loss {loss:.3f}")
-        # fig = generate_img_of_decodings_expanded(val_true, val_predict, [.20, .35, .50, .80, .9, .95, .99, .999])
 
-        # precision = 3
-        # floored_max = my_floor(max_pred, precision)
-        # thresh = sorted(floored_max + np.linspace(0, 1, 11) / 10**precision)
-        thresh = np.linspace(0, 1, 11)
-        fig = generate_img_of_decodings_expanded(val_true, val_predict, thresh)
+        fig = generate_img_of_decodings_expanded(val_true, val_predict, [0.5, 0.75, 0.95, 0.99])
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
         plt.close()
@@ -372,8 +605,12 @@ file_writer = tf.summary.create_file_writer(log_dir)
 file_writer.set_as_default()
 tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
 lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
+
 validation_data = (x_test_mod, y_test_mod)
 image_log_callback = CustomCallback(validation_data, penalty=penalty)
+
+# %% 
+# Alright let's go!
 history = autoencoder.fit(
     x_train_mod,
     y_train_mod,
@@ -387,8 +624,8 @@ history = autoencoder.fit(
         # tensorboard_callback,
     ])
 # %%
-encoder.save("models/3d_encoder.h5")
-decoder.save("models/3d_decoder.h5")
+autoencoder.encoder.save("models/3d_encoder.h5")
+autoencoder.decoder.save("models/3d_decoder.h5")
 autoencoder.save("models/3d_autoencoder.h5")
 # %%
 mpath = pathlib.Path("models/3d_encoder.h5")
@@ -401,17 +638,20 @@ if mpath.exists():
 
 mpath = pathlib.Path("models/3d_autoencoder.h5")
 if mpath.exists():
-    autoencoder = tf.keras.models.load_model(mpath, compile=False, custom_objects={'WeightedBinaryCrossEntropy': WeightedBinaryCrossEntropy(penalty), 'penalty':penalty})
+    autoencoder = tf.keras.models.load_model(mpath,
+                                             compile=False,
+                                             custom_objects={
+                                                 'WeightedBinaryCrossEntropy': WeightedBinaryCrossEntropy(penalty),
+                                                 'penalty': penalty
+                                             })
 
-# %%
-
+# %% 
 n = 5
 test_sample = np.array(random.sample(list(x_train), n))
-z = encoder.predict(test_sample)
+z = autoencoder.encoder.predict(test_sample)
 
 originals = test_sample.reshape(test_sample.shape[:-1])
-decodings = decoder.predict(z).reshape(test_sample.shape[:-1])
+decodings = autoencoder.decoder.predict(z).reshape(test_sample.shape[:-1])
 # %%
 generate_img_of_decodings(originals, decodings, thresh=.7)
 plt.show()
-

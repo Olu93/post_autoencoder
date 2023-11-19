@@ -231,8 +231,7 @@ f"Training: {x_train.shape} | Test: {x_test.shape}"
 # (But this is for rather advanced Python coders as you might not get everything immediately. The code is written in a framework I don't really know called Lasagne. It is based on Theano. So there was little copy pasting here possible.)
 #
 
-# %%
-## %% [markdown]
+# %% [markdown]
 # These are just abstractions of the main processing units. The setup is very common.
 # A convolution, then a dropout and afterwards normalisation. The order or even whether to use this setup is hotly debated.
 # Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/](this)
@@ -295,7 +294,7 @@ class Sampling(Layer):
         return z
 
 
-## %% [markdown]
+# %% [markdown]
 # I will also use a custom loss function. The reason here is, that all that we want is predict whether the cell in question has its voxel filled or not.
 # Remember, we only have one color &mdash; grey. And we don't even want anything between this color spectrum. What we want is either black or white. Absolute certainty for any of those.
 #
@@ -367,12 +366,12 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         return clipped_y_pred
 
 
-## %% [markdown]
+# %% [markdown]
 # ## Model definitions for encoding and decoding
 # The next part introduces the models. I also created a dedicated sampling layer, because I want to expand this approach to variational autoencoders in the future.
 # I don't think they are very comlicated to understand, given that I have abtracted the processing units away.
 
-## %% [markdown]
+# %% [markdown]
 # What's important in the encoder is that I return the last layer which is flattend AND the previous layer which is unflattend.
 # With this approach, I can bridge shapes onto the decoder.
 
@@ -396,7 +395,6 @@ class Encoder(Model):
         for layer in self.elayers:
             x = layer(x)
 
-        # print(self.bridging_shape)
         z = self.sampler(x)
         return z, x
 
@@ -407,11 +405,10 @@ class Encoder(Model):
         encoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
 
 
-## %% [markdown]
+# %% [markdown]
 # The decoder, on the other hand, builds two of his layers slightly after initialization. With this I can slightly defer the creation of these layers.
 # Why not in the call method then? I tried that, but it seems that TF or Keras does not recognize layers in the call method as trainable layers.
 # Hence, you will see a difference in number of training params if you do so nonetheless.
-
 
 class Decoder(Model):
     def __init__(self, original_shape, input_dim, DecoderUnit=DecoderUnit, name="decoder", **kwargs):
@@ -447,7 +444,7 @@ class Decoder(Model):
         decoder = Model(inputs=[x], outputs=self.call([x, None]))
         decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
 
-## %% [markdown]
+# %% [markdown]
 # Another point is, that both are models on their own, instead of specialized layers.
 # There is almost no difference, other than that making a summary of customized layers is quite complicated.
 # Most of the model summary will become hidden from you and replace by output shape "multiple".
@@ -456,7 +453,7 @@ class Decoder(Model):
 # If you don't get what I mean just switch Encoder(Model) to Encoder(Layer) and you will notice.
 
 
-## %% [markdown]
+# %% [markdown]
 # This code brings all together. With all the modularisation from beforehand it should be very straightforward.
 class AutoEncoder(Model):
     def __init__(self, data_shape, hidden_dim=300, verbose=False, name="autoencoder", **kwargs):
@@ -482,12 +479,8 @@ class AutoEncoder(Model):
         self.decoder.summary(line_length=line_length, positions=positions, print_fn=print_fn)
         return super().summary(line_length=line_length, positions=positions, print_fn=print_fn)
 
-    # def model(self):
-    #     x = layers.Input(shape=(32, 32, 32, 1))
-    #     return Model(inputs=[x], outputs=self.call(x))
 
-
-## %% [markdown]
+# %% [markdown]
 # I create a function that rescales the values in the data to a range that I see fit.
 # The reason is that Brock et al. found out that that a modification boosts the models performance significantly.
 # If you use tensorboard, you can view the output distributions of the predictions.
@@ -508,13 +501,13 @@ penalty = .97
 learning_rate = 0.01
 comment = "fixed"
 lbound, ubound = -0.01, 2
-batch_size = 5
+batch_size = 10
 hidden_dim = 300
 clip_margin = 1e-7
 
 autoencoder = AutoEncoder(data_shape=data_shape, hidden_dim=hidden_dim, verbose=2)
 loss_fn = WeightedBinaryCrossEntropy(penalty=penalty, clip_margin=clip_margin)
-opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
+# opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
 opt_cl = opt.Adam(learning_rate=learning_rate)
 
 autoencoder.compile(optimizer=opt_cl, loss=loss_fn)
@@ -586,13 +579,8 @@ class CustomCallback(tf.keras.callbacks.Callback):
         median_pred = np.median(val_predict)
         minmax_ratio = min_pred / max_pred
         print(f"Min {min_pred:.3f} - Max {max_pred:.3f} - Mean {mean_pred:.3f} - Loss {loss:.3f}")
-        # fig = generate_img_of_decodings_expanded(val_true, val_predict, [.20, .35, .50, .80, .9, .95, .99, .999])
 
-        # precision = 3
-        # floored_max = my_floor(max_pred, precision)
-        # thresh = sorted(floored_max + np.linspace(0, 1, 11) / 10**precision)
-        thresh = np.linspace(0.5, 1, 11)
-        fig = generate_img_of_decodings_expanded(val_true, val_predict, thresh)
+        fig = generate_img_of_decodings_expanded(val_true, val_predict, [0.5, 0.75, 0.95, 0.99])
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
         plt.close()
@@ -637,8 +625,8 @@ history = autoencoder.fit(
         # tensorboard_callback,
     ])
 # %%
-# encoder.save("models/3d_encoder.h5")
-# decoder.save("models/3d_decoder.h5")
+encoder.save("models/3d_encoder.h5")
+decoder.save("models/3d_decoder.h5")
 autoencoder.save("models/3d_autoencoder.h5")
 # %%
 mpath = pathlib.Path("models/3d_encoder.h5")
