@@ -69,9 +69,10 @@ from tensorflow.keras.datasets import mnist
 from sklearn.model_selection import train_test_split
 import pathlib
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-
+import matplotlib
 gpus = tf.config.experimental.list_physical_devices('GPU')
-tf.config.run_functions_eagerly(True)
+# matplotlib.use('TKAgg')
+# tf.config.run_functions_eagerly(True)
 
 if gpus:
     try:
@@ -120,14 +121,15 @@ def generate_img_of_decodings(encodings, decodings, n=5, thresh=.8):
 
 
 def generate_img_of_decodings_expanded(encodings, decodings, thresholds=[.9, .95, .99, .999, 1]):
+    
     rows = 1
     fig = plt.figure(figsize=(25, 5))
     n = len(thresholds) + 1
     encoding_res = len(encodings[0])
     ax = fig.add_subplot(rows, n, 1, projection='3d')
-    elem1 = np.argwhere(encodings[0])
+    elem1 = encodings[0].squeeze()
     ax.set_title("Original")
-    ax.scatter(elem1[:, 0], elem1[:, 1], elem1[:, 2], cmap="Greys_r")
+    ax.voxels(elem1, cmap="Greys_r")
     for i, tresh in enumerate(thresholds):
         cnt = i + 1
         ax = fig.add_subplot(rows, n, cnt + 1, projection='3d')
@@ -135,10 +137,10 @@ def generate_img_of_decodings_expanded(encodings, decodings, thresholds=[.9, .95
         ax.set_xlim(0, encoding_res)
         ax.set_ylim(0, encoding_res)
         ax.set_zlim(0, encoding_res)
-        mask = np.where(decodings[0] >= tresh, 1, np.zeros_like(decodings[0]))
-        masked_elem = mask * decodings[0]
-        elem2 = np.argwhere(masked_elem)
-        ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
+        # mask = np.where(decodings[0] >= tresh, 1, np.zeros_like(decodings[0]))
+        # masked_elem = mask * decodings[0]
+        elem2 = (decodings[0] >= tresh).squeeze()
+        ax.voxels(elem2, cmap="Greys_r")
 
     return fig
 
@@ -178,14 +180,14 @@ if not path_to_dataset.exists():
 # %% [markdown]
 # Let's see what we got. I used 32 as a default cell count in all dimensions.
 # 32 is just an arbitrary number I chose. Obviously, the more the more fine grained the images but the more data to process.
-plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 32)
+# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 32)
 
 # %% [markdown]
 # Let's check out what we retrieve with a lower resolution
-plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 8)
+# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 8)
 # %% [markdown]
 # Now with a higher one
-plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 64)
+# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 64)
 
 # %% [markdown]
 # Here, I convert all voxels to a numpy matrix with dimensions: [N, 32, 32, 32, 1]
@@ -346,12 +348,12 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
 
     @staticmethod
     def wbce_paper(y_true, y_pred, penalty, clip_margin=1e-3):
-        y_true_mod = WeightedBinaryCrossEntropy.rebase(y_true, -1,2)
-        y_pred_mod = WeightedBinaryCrossEntropy.rebase(y_pred, 0.1,1)
+        y_true_mod = WeightedBinaryCrossEntropy.rebase(y_true, 0,1)
+        y_pred_mod = WeightedBinaryCrossEntropy.rebase(y_pred, 0.00001,0.99999)
         positives = penalty * y_true_mod * tf.math.log(y_pred_mod)
         negatives = (1.0 - penalty) * (1.0 - y_true_mod) * tf.math.log(1.0 - y_pred_mod)
         binary_cross_entropy = - positives - negatives 
-        loss = tf.reduce_sum(binary_cross_entropy)
+        loss = tf.reduce_sum(binary_cross_entropy)/tf.cast(len(y_true_mod), tf.float32)
         return loss, binary_cross_entropy
 
     @staticmethod
@@ -502,11 +504,11 @@ def _rebase(x1, x2, min_val, max_val):
 
 ## %% [markdown]
 # Hyperparams. This needs no explanation.
-penalty = .90
+penalty = .97
 learning_rate = 0.01
 comment = "fixed"
 lbound, ubound = -0.01, 2
-batch_size = 2
+batch_size = 5
 hidden_dim = 300
 clip_margin = 1e-7
 
@@ -532,7 +534,6 @@ def construct_log_dir(elements=[]):
 
 
 elems = [
-    f"bounds[{lbound:07.7f} & {ubound:07.7f}]",
     f"penalty[{penalty:05.5f}]",
     f"lr[{learning_rate:07.7f}]",
     f"clip[{clip_margin:07.7f}]",
@@ -578,7 +579,7 @@ class CustomCallback(tf.keras.callbacks.Callback):
         test_sample = np.array(random.sample(list(self.x_test), 100))
         val_true = test_sample
         val_predict = np.asarray(self.model.predict(test_sample))
-        loss, bce = WeightedBinaryCrossEntropy.wbce(val_true, val_predict, self.penalty)
+        loss, bce = WeightedBinaryCrossEntropy.wbce_paper(val_true, val_predict, self.penalty)
         min_pred = np.min(val_predict)
         max_pred = np.max(val_predict)
         mean_pred = np.mean(val_predict)
@@ -590,7 +591,7 @@ class CustomCallback(tf.keras.callbacks.Callback):
         # precision = 3
         # floored_max = my_floor(max_pred, precision)
         # thresh = sorted(floored_max + np.linspace(0, 1, 11) / 10**precision)
-        thresh = np.linspace(0.85, 1, 11)
+        thresh = np.linspace(0.5, 1, 11)
         fig = generate_img_of_decodings_expanded(val_true, val_predict, thresh)
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
