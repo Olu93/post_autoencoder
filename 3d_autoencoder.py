@@ -11,7 +11,7 @@
 # %% [markdown]
 # ## Background
 
-# This part of the series needs a bit more explaination. So far, there haven't been many attempts to use CNN's for 3D objects. Why? Probably because of the representation that would be required for a vanilla CNN to work without many changes.
+# This part of the series needs a bit more explanation. So far, there haven't been many attempts to use CNN's for 3D objects. Why? Probably because of the representation that would be required for a vanilla CNN to work without many changes.
 
 # ### Pixels and Voxels
 
@@ -180,14 +180,13 @@ if not path_to_dataset.exists():
 # %% [markdown]
 # Let's see what we got. I used 32 as a default cell count in all dimensions.
 # 32 is just an arbitrary number I chose. Obviously, the more the more fine grained the images but the more data to process.
-# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 32)
-
+plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 32)
 # %% [markdown]
 # Let's check out what we retrieve with a lower resolution
-# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 8)
+plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 8)
 # %% [markdown]
 # Now with a higher one
-# plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 64)
+plot_pointcound_matplotlib(point_cloud_dataset_collected[4], 64)
 
 # %% [markdown]
 # Here, I convert all voxels to a numpy matrix with dimensions: [N, 32, 32, 32, 1]
@@ -210,11 +209,13 @@ data_shape = data.shape[1:]
 f"Loaded voxel data for {num_meshes} meshes"
 
 # %% [markdown]
-# By know, this should be fairly clear.
-#
+# Why am I adding the test set back to the training set? Autoencoders do not learn a distribution. There are more like efficient data stores. Hence, If you try to reconstruct things that were never seen before, they do not tend to perform well. This is something that the variational counterpart solves. Hence, in order to make sure the model actually can reconstruct the data we have to let it see the data.
 cut_point = .1
 x_train, x_test = train_test_split(data.astype(np.float), shuffle=True, test_size=.1)
-f"Training: {x_train.shape} | Test: {x_test.shape}"
+print(f"Initial Training: {x_train.shape} | Test: {x_test.shape}")
+x_train = np.concatenate([x_train, x_test])
+print(f"Readded test to training: {x_train.shape} | Test: {x_test.shape}")
+
 
 # %% [markdown]
 # ## The model building blocks
@@ -318,7 +319,6 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
     """
     def __init__(self,
                  penalty,
-                 clip_margin=1e-3,
                  reduction=tf.keras.losses.Reduction.AUTO,
                  name='weighted_binary_crossentropy'):
         super().__init__(reduction=reduction, name=name)
@@ -326,19 +326,10 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         self.clip_margin = clip_margin
 
     def call(self, y_true, y_pred):
-        return WeightedBinaryCrossEntropy.wbce_paper(y_true, y_pred, self.penalty, self.clip_margin)[0]
-
-    @staticmethod
-    def wbce_old(y_true, y_pred, penalty, clip_margin=1e-3):
-        penalty *= 100
-        clipped_y_pred = WeightedBinaryCrossEntropy.clip_pred(y_pred, clip_margin, 1.0 - clip_margin)
-        binary_cross_entropy = -(penalty * y_true * tf.math.log(clipped_y_pred) + (100 - penalty) *
-                                 (1.0 - y_true) * tf.math.log(1.0 - clipped_y_pred)) / 100.0
-        loss = tf.reduce_sum(binary_cross_entropy)
-        return loss, binary_cross_entropy
+        return WeightedBinaryCrossEntropy.wbce_paper(y_true, y_pred, self.penalty)[0]
     
     @staticmethod
-    def wbce_new(y_true, y_pred, penalty, clip_margin=1e-3):
+    def wbce_new(y_true, y_pred, penalty):
         positives = penalty * y_true * tf.math.log(y_pred)
         negatives = (1.0 - penalty) * (1.0 - y_true) * tf.math.log(1.0 - y_pred)
         binary_cross_entropy = - positives - negatives 
@@ -346,7 +337,7 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         return loss, binary_cross_entropy
 
     @staticmethod
-    def wbce_paper(y_true, y_pred, penalty, clip_margin=1e-3):
+    def wbce_paper(y_true, y_pred, penalty):
         y_true_mod = WeightedBinaryCrossEntropy.rebase(y_true, 0,1)
         y_pred_mod = WeightedBinaryCrossEntropy.rebase(y_pred, 0.00001,0.99999)
         positives = penalty * y_true_mod * tf.math.log(y_pred_mod)
@@ -360,10 +351,6 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
         x1 = (x1 * (max_val - min_val)) + min_val
         return x1
 
-    @staticmethod
-    def clip_pred(y_pred, min_val, max_val):
-        clipped_y_pred = tf.keras.backend.clip(y_pred, min_val, max_val)
-        return clipped_y_pred
 
 
 # %% [markdown]
@@ -495,29 +482,24 @@ def _rebase(x1, x2, min_val, max_val):
     return x1, x2
 
 
-## %% [markdown]
+# %% [markdown]
 # Hyperparams. This needs no explanation.
-penalty = .97
+penalty = .9
 learning_rate = 0.01
 comment = "fixed"
 lbound, ubound = -0.01, 2
-batch_size = 10
+batch_size = 5
 hidden_dim = 300
 clip_margin = 1e-7
+epochs = 50
 
 autoencoder = AutoEncoder(data_shape=data_shape, hidden_dim=hidden_dim, verbose=2)
-loss_fn = WeightedBinaryCrossEntropy(penalty=penalty, clip_margin=clip_margin)
+loss_fn = WeightedBinaryCrossEntropy(penalty=penalty)
 # opt_cl = opt.SGD(learning_rate=learning_rate, nesterov=True, momentum=.9)
 opt_cl = opt.Adam(learning_rate=learning_rate)
 
 autoencoder.compile(optimizer=opt_cl, loss=loss_fn)
 autoencoder.summary()
-# %%
-x_train_mod, y_train_mod = _rebase(x_train, x_train, 0, 1)
-x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
-# x_train_mod, y_train_mod = _rebase(x_train, x_train, lbound, ubound)
-# x_test_mod, y_test_mod = _rebase(x_test, x_test, 0, 1)
-
 
 # %% [markdown]
 # Some minor stuff with regards to tensorboard. This code helped debugging my model.
@@ -529,7 +511,6 @@ def construct_log_dir(elements=[]):
 elems = [
     f"penalty[{penalty:05.5f}]",
     f"lr[{learning_rate:07.7f}]",
-    f"clip[{clip_margin:07.7f}]",
     f"batch[{batch_size:02d}]",
     f"dim[{hidden_dim:03d}]",
     f"{comment}" if comment else "NA",
@@ -580,7 +561,7 @@ class CustomCallback(tf.keras.callbacks.Callback):
         minmax_ratio = min_pred / max_pred
         print(f"Min {min_pred:.3f} - Max {max_pred:.3f} - Mean {mean_pred:.3f} - Loss {loss:.3f}")
 
-        fig = generate_img_of_decodings_expanded(val_true, val_predict, [0.5, 0.75, 0.95, 0.99])
+        fig = generate_img_of_decodings_expanded(val_true, val_predict, [0.5, 0.75, 0.9, 0.95])
         fig.tight_layout()
         fig.savefig('example.png')  # save the figure to file
         plt.close()
@@ -606,15 +587,15 @@ file_writer.set_as_default()
 tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
 lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
 
-validation_data = (x_test_mod, y_test_mod)
+validation_data = (x_test, x_test)
 image_log_callback = CustomCallback(validation_data, penalty=penalty)
 
 # %% 
 # Alright let's go!
 history = autoencoder.fit(
-    x_train_mod,
-    y_train_mod,
-    epochs=100,
+    x_train,
+    x_train,
+    epochs=epochs,
     batch_size=batch_size,
     shuffle=True,
     validation_data=validation_data,
