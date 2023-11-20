@@ -1,7 +1,7 @@
 # %% [markdown]
 ## Convolutional variational autoencoder for face generation!
 # This code shows the example of an autoencoder applied on the MNIST and faces dataset.
-# It is the natural extension of [./2d_autoencoder.ipynb](Part 1) of this series.
+# It is the natural extension of [Part 1](./2d_autoencoder.ipynb) of this series.
 #
 # These links complement the ones introduced in Part 1:
 # - https://keras.io/examples/generative/vae/
@@ -34,13 +34,13 @@ x_test = np.reshape(x_test, (len(x_test), 28, 28, 1))  # adapt this if using `ch
 # This is largely the same code as in Part 1. However, take a closer look at the encoder.
 # Instead of returning an embedding vector only we return a mean and a log term of the variance vector.
 # The logterm is more of a practical issue, as it ensures numerical stability when values get pretty small.
-# Its not a very important detail, but if you want to know more, checkout this [https://wiseodd.github.io/techblog/2016/12/10/variational-autoencoder/](comprehensive post)
+# Its not a very important detail, but if you want to know more, checkout this [comprehensive post](https://wiseodd.github.io/techblog/2016/12/10/variational-autoencoder/)
 # about VAE's and their implementation.
 # Other than that we return a vector sample using the mean and variance. More on the sampling operation in the next cell.
 # In the decoder, I swapped the fairly verbose Conv2D-Upsampling pattern with the Conv2DTranspose layer, because it does the same and is shorter, in principle.
 # However, the devil lies in the detail. The Conv2DTranspose learns the best way to upsample the image.
-# If you want to learn more about this layer checkout this [https://stackoverflow.com/a/53655426/4162265](StackOverflow-Answer)
-# and this neat visual [https://towardsdatascience.com/types-of-convolutions-in-deep-learning-717013397f4d](Blog-Post explanation).
+# If you want to learn more about this layer checkout this [StackOverflow-Answer](https://stackoverflow.com/a/53655426/4162265)
+# and this neat visual [Blog-Post explanation](https://towardsdatascience.com/types-of-convolutions-in-deep-learning-717013397f4d).
 #
 
 

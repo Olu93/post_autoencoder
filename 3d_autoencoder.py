@@ -2,7 +2,7 @@
 ## 3D Convolutional autoencoder for voxel data!
 #
 # This code shows the example of a 3D convolution autoencoder applied on ModelNet40 and PSB datasets.
-# It is the natural extension of [./2d_autoencoder.ipynb](Part 1) of this series.
+# It is the natural extension of [Part 1](./2d_autoencoder.ipynb) of this series.
 #
 # These links complement the ones introduced in Part 1:
 # - https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling/tree/master/Generative
@@ -39,8 +39,8 @@
 
 # For more about these matters checkout following materials:
 
-# - [https://medium.com/@EightyLevel/how-voxels-became-the-next-big-thing-4eb9665cd13a](An explanation for voxels imminent comeback in Gaming. May be a bit difficult to follow.)
-# - [https://www.quora.com/What-are-the-pros-and-cons-of-using-voxels-instead-of-polygons](Best explanation that I found on this topic. Also videogame centric.)
+# - [An explanation for voxels imminent comeback in Gaming. May be a bit difficult to follow.](https://medium.com/@EightyLevel/how-voxels-became-the-next-big-thing-4eb9665cd13a)
+# - [Best explanation that I found on this topic. Also videogame centric.](https://www.quora.com/What-are-the-pros-and-cons-of-using-voxels-instead-of-polygons)
 
 # %%
 from datetime import datetime
@@ -103,19 +103,19 @@ def plot_binary_pointcound(vertex_list):
     tcloud.plot(mesh=True, width=400, height=400, backend="threejs")
 
 
-def generate_img_of_decodings(encodings, decodings, n=5, thresh=.8):
+def generate_img_of_decodings(encodings, decodings, n=5, thresh=.5):
     rows = 2
     fig = plt.figure(figsize=(8, 5))
 
     for i in range(0, n):
         cnt = i + 1
         ax = fig.add_subplot(rows, n, cnt, projection='3d')
-        elem1 = np.argwhere(encodings[i])
-        ax.scatter(elem1[:, 0], elem1[:, 1], elem1[:, 2], cmap="Greys_r")
+        elem1 = encodings[i]
+        ax.voxels(elem1, cmap="Greys_r")
         # encoding_strings = "\n".join([f"{feature:.2f}" for feature in z[i]])
         ax = fig.add_subplot(rows, n, cnt + 1 * n, projection='3d')
-        elem2 = np.argwhere(decodings[i] >= thresh)
-        ax.scatter(elem2[:, 0], elem2[:, 1], elem2[:, 2], cmap="Greys_r")
+        elem2 = decodings[i] >= thresh
+        ax.voxels(elem2, cmap="Greys_r")
 
     return fig
 
@@ -160,7 +160,7 @@ def plot_pointcound_matplotlib(pynt_cloud_object, n=32):
 # %% [markdown]
 # ## Data preprocessing
 # Because I only have polygon meshes of the data, I decided to opt for a library to convert those to voxel representations.
-# The library is called [https://github.com/daavoo/pyntcloud](pyntcloud).
+# The library is called [pyntcloud](https://github.com/daavoo/pyntcloud).
 
 path_to_dataset = pathlib.Path("data/dataset.pkl")
 point_cloud_dataset_collected = None
@@ -226,16 +226,16 @@ print(f"Readded test to training: {x_train.shape} | Test: {x_test.shape}")
 # - https://www.tensorflow.org/guide/keras/custom_layers_and_models#putting_it_all_together_an_end-to-end_example
 #
 # I took most of the conceptual ideas from the paper that inspired this code:
-# [http://arxiv.org/abs/1608.04236](Generative and Discriminative Voxel Modeling with Convolutional Neural Networks) by Brock et. al.
-# Luckily he provides a quick run down in a [https://www.youtube.com/watch?v=LtpU1yBStlU](video)
-# I also took inspiration from his code on [https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling](Github) in order to understand and debug.
+# [Generative and Discriminative Voxel Modeling with Convolutional Neural Networks](http://arxiv.org/abs/1608.04236) by Brock et. al.
+# Luckily he provides a quick run down in a [video](https://www.youtube.com/watch?v=LtpU1yBStlU)
+# I also took inspiration from his code on [Github](https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling) in order to understand and debug.
 # (But this is for rather advanced Python coders as you might not get everything immediately. The code is written in a framework I don't really know called Lasagne. It is based on Theano. So there was little copy pasting here possible.)
 #
 
 # %% [markdown]
 # These are just abstractions of the main processing units. The setup is very common.
 # A convolution, then a dropout and afterwards normalisation. The order or even whether to use this setup is hotly debated.
-# Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/](this)
+# Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [this](https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/)
 # I might drop the dropout layer in the future as it seems to have fallen from grace.
 
 WITH_DROP = False
@@ -305,7 +305,7 @@ class Sampling(Layer):
 #
 # The solution is weighting correctly predicted cells that are empty less than hitting a filled cell.
 # Additionally, I decided to not take the mean of the sum, because this does not produce a large flow of loss back into the model. Or at least that was my intuition.
-# The general design for the code was taken from [https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x](here)
+# The general design for the code was taken from [here](https://stackoverflow.com/questions/61799546/how-to-custom-losses-by-subclass-tf-keras-losses-loss-class-in-tensorflow2-x)
 
 
 class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
@@ -323,7 +323,6 @@ class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
                  name='weighted_binary_crossentropy'):
         super().__init__(reduction=reduction, name=name)
         self.penalty = penalty
-        self.clip_margin = clip_margin
 
     def call(self, y_true, y_pred):
         return WeightedBinaryCrossEntropy.wbce_paper(y_true, y_pred, self.penalty)[0]
@@ -487,10 +486,8 @@ def _rebase(x1, x2, min_val, max_val):
 penalty = .9
 learning_rate = 0.01
 comment = "fixed"
-lbound, ubound = -0.01, 2
 batch_size = 5
-hidden_dim = 300
-clip_margin = 1e-7
+hidden_dim = 200 
 epochs = 50
 
 autoencoder = AutoEncoder(data_shape=data_shape, hidden_dim=hidden_dim, verbose=2)
@@ -604,35 +601,52 @@ history = autoencoder.fit(
         # lr_callback,
         # tensorboard_callback,
     ])
-# %%
-autoencoder.encoder.save("models/3d_encoder.h5")
-autoencoder.decoder.save("models/3d_decoder.h5")
-autoencoder.save("models/3d_autoencoder.h5")
-# %%
-mpath = pathlib.Path("models/3d_encoder.h5")
-if mpath.exists():
-    encoder = tf.keras.models.load_model(mpath)
 
-mpath = pathlib.Path("models/3d_decoder.h5")
-if mpath.exists():
-    decoder = tf.keras.models.load_model(mpath)
 
-mpath = pathlib.Path("models/3d_autoencoder.h5")
+# %% [markdown]
+# Let's save the model, so that we can reuse it.
+autoencoder.save("models/3d_autoencoder.tfmodel", save_format="tf")
+# %% [markdown]
+# Here, I am loading the model again.
+autoencoder_loaded = None
+mpath = pathlib.Path("models/3d_autoencoder.tfmodel")
 if mpath.exists():
-    autoencoder = tf.keras.models.load_model(mpath,
+    autoencoder_loaded = tf.keras.models.load_model(mpath,
                                              compile=False,
                                              custom_objects={
                                                  'WeightedBinaryCrossEntropy': WeightedBinaryCrossEntropy(penalty),
                                                  'penalty': penalty
                                              })
 
-# %% 
+# %% [markdown]
+# I am executing the saved model on 5 samples. First, I generate z.  
 n = 5
 test_sample = np.array(random.sample(list(x_train), n))
-z = autoencoder.encoder.predict(test_sample)
-
+z = autoencoder_loaded.encoder.predict(test_sample)
+f"Received two arrays"
+# %% [markdown]
+# With z, I can decode the original values.
 originals = test_sample.reshape(test_sample.shape[:-1])
-decodings = autoencoder.decoder.predict(z).reshape(test_sample.shape[:-1])
+decodings = autoencoder_loaded.decoder([tf.convert_to_tensor(z[0]), tf.convert_to_tensor(z[1])]).numpy().reshape(test_sample.shape[:-1])
+# %% [markdown]
+# This results in the following decodings
+
+generate_img_of_decodings(originals, decodings, thresh=.5)
+plt.show()
+
 # %%
-generate_img_of_decodings(originals, decodings, thresh=.7)
+n = 5
+test_sample = np.array(random.sample(list(x_train), n))
+z = autoencoder_loaded.encoder.predict(test_sample)
+originals = test_sample.reshape(test_sample.shape[:-1])
+decodings = autoencoder_loaded.decoder([tf.convert_to_tensor(z[0]), tf.convert_to_tensor(z[1])]).numpy().reshape(test_sample.shape[:-1])
+generate_img_of_decodings(originals, decodings, thresh=.5)
+plt.show()
+# %%
+n = 5
+test_sample = np.array(random.sample(list(x_train), n))
+z = autoencoder_loaded.encoder.predict(test_sample)
+originals = test_sample.reshape(test_sample.shape[:-1])
+decodings = autoencoder_loaded.decoder([tf.convert_to_tensor(z[0]), tf.convert_to_tensor(z[1])]).numpy().reshape(test_sample.shape[:-1])
+generate_img_of_decodings(originals, decodings, thresh=.5)
 plt.show()

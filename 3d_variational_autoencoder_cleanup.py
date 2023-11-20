@@ -2,22 +2,22 @@
 ## 3D Convolutional variational autoencoder for voxel data!
 #
 # This code shows the example of a 3D convolution VAE applied on ModelNet40 and PSB datasets.
-# It is the natural extension of [./3d_autoencoder.ipynb](Part 3) in this series.
+# It is the natural extension of [Part 3](./3d_autoencoder.ipynb) in this series.
 
 
 # %% [markdown]
 # ## Background
 
-# We arrived at the final part of these series of VAE implementations. The 3D VAE is a slight extension to what we built beforehand. Like in [./2d_variational_autoencoder.ipynb](Part 2) the key difference lies in the sampling operation. Instead of returning an embedding vector only we return a mean and a log term of the variance vector. So that we can sample from the learned space.
+# We arrived at the final part of these series of VAE implementations. The 3D VAE is a slight extension to what we built beforehand. Like in [Part 2](./2d_variational_autoencoder.ipynb) the key difference lies in the sampling operation. Instead of returning an embedding vector only we return a mean and a log term of the variance vector. So that we can sample from the learned space.
 
-# I will reuse a lot of code from [./3d_autoencoder.ipynb](Part 3). Make sure to check that one out.
+# I will reuse a lot of code from [Part 3](./3d_autoencoder.ipynb). Make sure to check that one out.
 
 # ### Links
 
 # For more about these matters checkout following materials:
 
-# - [https://medium.com/tensorflow/variational-autoencoders-with-tensorflow-probability-layers-d06c658931b7](XXX)
-# - [https://towardsdatascience.com/6-different-ways-of-implementing-vae-with-tensorflow-2-and-tensorflow-probability-9fe34a8ab981](XXX)
+# - [XXX](https://medium.com/tensorflow/variational-autoencoders-with-tensorflow-probability-layers-d06c658931b7)
+# - [XXX](https://towardsdatascience.com/6-different-ways-of-implementing-vae-with-tensorflow-2-and-tensorflow-probability-9fe34a8ab981)
 
 # %% [markdown]
 # First, all the definitions, functions, constants etc.
@@ -135,7 +135,7 @@ def plot_pointcound_matplotlib(pynt_cloud_object, n=32):
 # %% [markdown]
 # ## Data preprocessing
 # Because I only have polygon meshes of the data, I decided to opt for a library to convert those to voxel representations.
-# The library is called [https://github.com/daavoo/pyntcloud](pyntcloud).
+# The library is called [pyntcloud](https://github.com/daavoo/pyntcloud).
 
 path_to_dataset = pathlib.Path("data/dataset.pkl")
 point_cloud_dataset_collected = None
@@ -185,16 +185,16 @@ f"Training: {x_train.shape} | Test: {x_test.shape}"
 # ## The model building blocks
 # This is where the model starts. 
 # I took most of the conceptual ideas from the paper that inspired this code:
-# [http://arxiv.org/abs/1608.04236](Generative and Discriminative Voxel Modeling with Convolutional Neural Networks) by Brock et. al.
-# Luckily he provides a quick run down in a [https://www.youtube.com/watch?v=LtpU1yBStlU](video)
-# I also took inspiration from his code on [https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling](Github) in order to understand and debug.
+# [Generative and Discriminative Voxel Modeling with Convolutional Neural Networks](http://arxiv.org/abs/1608.04236) by Brock et. al.
+# Luckily he provides a quick run down in a [video](https://www.youtube.com/watch?v=LtpU1yBStlU)
+# I also took inspiration from his code on [Github](https://github.com/ajbrock/Generative-and-Discriminative-Voxel-Modeling) in order to understand and debug.
 # (But this is for rather advanced Python coders as you might not get everything immediately. The code is written in a framework I don't really know called Lasagne. It is based on Theano. So there was little copy pasting here possible.)
 #
 
 # %% [markdown]
 # These are just abstractions of the main processing units. The setup is very common.
 # A convolution, then a dropout and afterwards normalisation. The order or even whether to use this setup is hotly debated.
-# Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/](this)
+# Checkout [https://stackoverflow.com/questions/39691902/ordering-of-batch-normaliazation-and-dropout](this) or [this](https://www.reddit.com/r/MachineLearning/comments/67gonq/d_batch_normalization_before_or_after_relu/)
 # I might drop the dropout layer in the future as it seems to have fallen from grace.
 
 WITH_DROP = False
@@ -261,7 +261,7 @@ class Sampling(Layer):
         return z_mean + tf.exp(0.5 * z_log_var) * epsilon, z_mean, z_log_var
 
 # %% [markdown]
-# As in part 3 we are going to use the custom loss function from [http://arxiv.org/abs/1608.04236](Generative and Discriminative Voxel Modeling with Convolutional Neural Networks) by Brock et. al.
+# As in part 3 we are going to use the custom loss function from [Generative and Discriminative Voxel Modeling with Convolutional Neural Networks](http://arxiv.org/abs/1608.04236) by Brock et. al.
 
 class WeightedBinaryCrossEntropy(tf.keras.losses.Loss):
     """
